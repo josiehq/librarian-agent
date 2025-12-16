@@ -1,10 +1,15 @@
 #!/bin/bash
-# JOSIEDESK QUICK START GUIDE
+# LIBRARIAN AGENT - QUICK START GUIDE
 
-echo "=== JosieDesk System Initialization ==="
+set -e
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║        LIBRARIAN AGENT - MULTI-AGENT SWARM STARTUP        ║"
+echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Step 1: Install Python dependencies"
-echo "  cd /home/Josie/DEV/Pythong/JOSIEDESK/v1/librarian-agent"
+echo "  cd $REPO_ROOT"
 echo "  pip install -e ."
 echo ""
 

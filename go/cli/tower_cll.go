@@ -1,9 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -25,41 +24,41 @@ import (
 // =============================================================================
 
 type SystemState struct {
-	ActiveProcesses int                      `json:"active_processes"`
-	TotalProcesses  int                      `json:"total_processes"`
-	TotalVRAM       float64                  `json:"total_vram"`
-	TotalTokens     int                      `json:"total_tokens"`
-	Processes       map[string]*ProcessState `json:"processes"`
-	Waria           *WariaState              `json:"waria"`
+	ActiveProcesses int                      `json:"active_processes"`
+	TotalProcesses  int                      `json:"total_processes"`
+	TotalVRAM       float64                  `json:"total_vram"`
+	TotalTokens     int                      `json:"total_tokens"`
+	Processes       map[string]*ProcessState `json:"processes"`
+	Waria           *WariaState              `json:"waria"`
 }
 
 type ProcessState struct {
-	ID         string    `json:"id"`
-	Agent      string    `json:"agent"`
-	Phase      string    `json:"phase"`
-	Status     string    `json:"status"`
-	StartTime  time.Time `json:"start_time"`
-	GPU        int       `json:"gpu"`
-	VRAMUsage  float64   `json:"vram_usage"`
-	TokenCount int       `json:"token_count"`
-	LastOutput string    `json:"last_output"`
+	ID         string    `json:"id"`
+	Agent      string    `json:"agent"`
+	Phase      string    `json:"phase"`
+	Status     string    `json:"status"`
+	StartTime  time.Time `json:"start_time"`
+	GPU        int       `json:"gpu"`
+	VRAMUsage  float64   `json:"vram_usage"`
+	TokenCount int       `json:"token_count"`
+	LastOutput string    `json:"last_output"`
 }
 
 type WariaState struct {
-	PromptLength      int              `json:"prompt_length"`
-	ContextReuse      int              `json:"context_reuse"`
-	CrossPhaseRefs    int              `json:"cross_phase_refs"`
-	ConfidencePlateau bool             `json:"confidence_plateau"`
-	VerbosityIncrease bool             `json:"verbosity_increase"`
-	Thresholds        []WariaThreshold `json:"thresholds"`
-	TipPackets        []string         `json:"tip_packets"`
+	PromptLength      int              `json:"prompt_length"`
+	ContextReuse      int              `json:"context_reuse"`
+	CrossPhaseRefs    int              `json:"cross_phase_refs"`
+	ConfidencePlateau bool             `json:"confidence_plateau"`
+	VerbosityIncrease bool             `json:"verbosity_increase"`
+	Thresholds        []WariaThreshold `json:"thresholds"`
+	TipPackets        []string         `json:"tip_packets"`
 }
 
 type WariaThreshold struct {
-	Name      string  `json:"name"`
-	Current   float64 `json:"current"`
+	Name      string  `json:"name"`
+	Current   float64 `json:"current"`
 	Threshold float64 `json:"threshold"`
-	Breached  bool    `json:"breached"`
+	Breached  bool    `json:"breached"`
 }
 
 // =============================================================================
@@ -95,29 +94,86 @@ var (
 )
 
 type model struct {
-	ws            *websocket.Conn
-	state         SystemState
-	processTable  table.Model
+	ws            *websocket.Conn
+	state         SystemState
+	processTable  table.Model
 	wariaViewport viewport.Model
 	selectedPanel int // 0: processes, 1: waria
-	width         int
-	height        int
-	err           error
+	width         int
+	height        int
+	err           error
+	// Service endpoints and statuses
+	wsURL     string
+	mcpURL    string
+	memoryURL string
+	wsOK      bool
+	mcpOK     bool
+	memoryOK  bool
 }
 
 type stateMsg SystemState
 type errMsg error
+type statusMsg struct {
+	WS     bool
+	MCP    bool
+	Memory bool
+}
+
+// pollStatusCmd checks service endpoints and returns a statusMsg; reissued by Update.
+func pollStatusCmd(wsURL, mcpURL, memoryURL string, haveWS bool) tea.Cmd {
+	return func() tea.Msg {
+		wsOK := false
+		if haveWS {
+			wsOK = true
+		} else {
+			// Try dialing briefly
+			if _, _, err := websocket.DefaultDialer.Dial(wsURL, nil); err == nil {
+				wsOK = true
+			}
+		}
+
+		mcpOK := false
+		if resp, err := http.Get(mcpURL + "/api/state"); err == nil {
+			mcpOK = true
+			resp.Body.Close()
+		}
+
+		memoryOK := false
+		if resp, err := http.Get(memoryURL); err == nil {
+			memoryOK = true
+			resp.Body.Close()
+		}
+
+		time.Sleep(1500 * time.Millisecond)
+		return statusMsg{WS: wsOK, MCP: mcpOK, Memory: memoryOK}
+	}
+}
 
 // =============================================================================
 // BUBBLETEA LIFE CYCLE
 // =============================================================================
 
 func initialModel() model {
-	// Connect to Kirktower WebSocket
-	ws, _, err := websocket.DefaultDialer.Dial("ws://localhost:9090/ws", nil)
-	if err != nil {
-		// Do not log.Fatal here, return the error to the tea program
-		return model{err: fmt.Errorf("WebSocket connection failed: %w", err)}
+	// Read endpoints from env with sensible defaults
+	wsURL := os.Getenv("KIRKTOWER_WS")
+	if wsURL == "" {
+		wsURL = "ws://localhost:8080/ws"
+	}
+	mcpURL := os.Getenv("KIRKTOWER_HTTP")
+	if mcpURL == "" {
+		mcpURL = "http://localhost:8080"
+	}
+	memoryURL := os.Getenv("DIPLO_MEMORY_HTTP")
+	if memoryURL == "" {
+		memoryURL = "http://localhost:8081"
+	}
+
+	// Try to establish a WebSocket, but do not fail hard if it isn't available yet.
+	var ws *websocket.Conn
+	wsOK := false
+	if conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil); err == nil {
+		ws = conn
+		wsOK = true
 	}
 
 	columns := []table.Column{
@@ -152,10 +208,14 @@ func initialModel() model {
 	vp := viewport.New(80, 10)
 
 	m := model{
-		ws:            ws,
-		processTable:  t,
+		ws:            ws,
+		processTable:  t,
 		wariaViewport: vp,
 		selectedPanel: 0,
+		wsURL:         wsURL,
+		mcpURL:        mcpURL,
+		memoryURL:     memoryURL,
+		wsOK:          wsOK,
 	}
 
 	return m
@@ -165,10 +225,13 @@ func (m model) Init() tea.Cmd {
 	if m.err != nil {
 		return tea.Quit // Quit immediately if connection failed
 	}
-	return tea.Batch(
-		listenForStateUpdates(m.ws),
-		tea.EnterAltScreen,
-	)
+	// Start WS listener if we have a connection, and start periodic status polling
+	cmds := []tea.Cmd{tea.EnterAltScreen}
+	if m.ws != nil {
+		cmds = append(cmds, listenForStateUpdates(m.ws))
+	}
+	cmds = append(cmds, pollStatusCmd(m.wsURL, m.mcpURL, m.memoryURL, m.ws != nil))
+	return tea.Batch(cmds...)
 }
 
 func listenForStateUpdates(ws *websocket.Conn) tea.Cmd {
@@ -222,13 +285,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "p":
-			if m.selectedPanel == 0 { m.sendCommand("pause") }
+			if m.selectedPanel == 0 {
+				m.sendCommand("pause")
+			}
 		case "r":
-			if m.selectedPanel == 0 { m.sendCommand("resume") }
+			if m.selectedPanel == 0 {
+				m.sendCommand("resume")
+			}
 		case "x":
-			if m.selectedPanel == 0 { m.sendCommand("kill") }
+			if m.selectedPanel == 0 {
+				m.sendCommand("kill")
+			}
 		case "K":
-			if m.selectedPanel == 0 { m.sendCommand("kill_loop") }
+			if m.selectedPanel == 0 {
+				m.sendCommand("kill_loop")
+			}
 		}
 
 	case stateMsg:
@@ -236,11 +307,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateProcessTable()
 		m.updateWariaView()
 		// CRITICAL: Re-queue the listener to wait for the NEXT state update
-		return m, listenForStateUpdates(m.ws) 
+		// continue polling status as well
+		return m, tea.Batch(listenForStateUpdates(m.ws), pollStatusCmd(m.wsURL, m.mcpURL, m.memoryURL, m.ws != nil))
 
 	case errMsg:
 		m.err = msg
-		if m.ws != nil { m.ws.Close() }
+		if m.ws != nil {
+			m.ws.Close()
+		}
 		return m, tea.Quit
 
 	case tea.WindowSizeMsg:
@@ -248,13 +322,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.processTable.SetWidth(msg.Width - 4)
 		m.wariaViewport.Width = msg.Width - 4
-		
+
 		// Update table height based on window size to prevent overflow
 		tableHeight := m.height - 18 // Estimate space needed for header, stats, waria, and controls
-		if tableHeight < 3 { tableHeight = 3 }
+		if tableHeight < 3 {
+			tableHeight = 3
+		}
 		m.processTable.SetHeight(tableHeight)
 
 		return m, nil
+	}
+
+	// Handle periodic status updates
+	switch s := msg.(type) {
+	case statusMsg:
+		m.wsOK = s.WS
+		m.mcpOK = s.MCP
+		m.memoryOK = s.Memory
+
+		// If WS became available and we don't have a persistent connection, try to connect now
+		if m.ws == nil && m.wsOK {
+			if conn, _, err := websocket.DefaultDialer.Dial(m.wsURL, nil); err == nil {
+				m.ws = conn
+				// start listening for state updates
+				return m, tea.Batch(listenForStateUpdates(m.ws), pollStatusCmd(m.wsURL, m.mcpURL, m.memoryURL, true))
+			}
+		}
+
+		// Continue polling
+		return m, pollStatusCmd(m.wsURL, m.mcpURL, m.memoryURL, m.ws != nil)
 	}
 
 	return m, cmd
@@ -332,7 +428,7 @@ func (m *model) updateWariaView() {
 			}
 		}
 
-		content.WriteString(fmt.Sprintf("  %s: %.2f/%.2f (%.0f%%) %s\n",
+		content.WriteString(fmt.Sprintf("  %s: %.2f/%.2f (%.0f%%) %s\n",
 			t.Name,
 			t.Current,
 			t.Threshold,
@@ -342,9 +438,9 @@ func (m *model) updateWariaView() {
 
 	// Flags
 	content.WriteString("\nFlags:\n")
-	content.WriteString(fmt.Sprintf("  Confidence Plateau: %v\n", m.state.Waria.ConfidencePlateau))
-	content.WriteString(fmt.Sprintf("  Verbosity Increase: %v\n", m.state.Waria.VerbosityIncrease))
-	content.WriteString(fmt.Sprintf("  Cross-Phase Refs: %d\n", m.state.Waria.CrossPhaseRefs))
+	content.WriteString(fmt.Sprintf("  Confidence Plateau: %v\n", m.state.Waria.ConfidencePlateau))
+	content.WriteString(fmt.Sprintf("  Verbosity Increase: %v\n", m.state.Waria.VerbosityIncrease))
+	content.WriteString(fmt.Sprintf("  Cross-Phase Refs: %d\n", m.state.Waria.CrossPhaseRefs))
 
 	// Tip Packets
 	if len(m.state.Waria.TipPackets) > 0 {
@@ -369,7 +465,7 @@ func (m *model) sendCommand(action string) {
 
 	// The process ID (truncated) is in the first column now
 	selectedIDPrefix := row[0]
-	
+
 	// Find the full process ID by matching the prefix
 	var processID string
 	var phase string
@@ -392,13 +488,13 @@ func (m *model) sendCommand(action string) {
 	case "pause", "resume", "kill":
 		cmd = map[string]interface{}{
 			"action": action,
-			"id":     processID, // Use the full, unique ID
+			"id":     processID, // Use the full, unique ID
 		}
 	case "kill_loop":
 		// This command targets the entire phase, not just one process
 		cmd = map[string]interface{}{
 			"action": action,
-			"loop":   phase,
+			"loop":   phase,
 		}
 	}
 
@@ -421,12 +517,29 @@ func (m model) View() string {
 	header += titleStyle.Render("╚═══════════════════════════════════════════════════════════╝")
 
 	// System stats
+	// Service status indicators
+	wsStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444")).Render("✖ WS")
+	if m.wsOK {
+		wsStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Render("● WS")
+	}
+	mcpStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444")).Render("✖ MCP")
+	if m.mcpOK {
+		mcpStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Render("● MCP")
+	}
+	memStatus := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF4444")).Render("✖ MEM")
+	if m.memoryOK {
+		memStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Render("● MEM")
+	}
+
 	stats := fmt.Sprintf(
-		"Active: %d/%d | VRAM: %.2f GB | Tokens: %d | Time: %s",
+		"Active: %d/%d | VRAM: %.2f GB | Tokens: %d | %s %s %s | Time: %s",
 		m.state.ActiveProcesses,
 		m.state.TotalProcesses,
 		m.state.TotalVRAM,
 		m.state.TotalTokens,
+		wsStatus,
+		mcpStatus,
+		memStatus,
 		time.Now().Format("15:04:05 MST"),
 	)
 

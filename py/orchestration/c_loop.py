@@ -22,7 +22,7 @@ except ImportError:
 
 # Import Diplo's memory service for the query tool
 try:
-    from josiedesk_memory import diplo_memory
+    from py.memory.diplo import diplo_memory
 except ImportError:
     print("CRITICAL: Could not import diplo_memory. Ensure josiedesk_memory.py is configured.")
     # Define a mock for testing if memory service isn't set up yet

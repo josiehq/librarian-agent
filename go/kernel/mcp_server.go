@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // NOTE: This file depends on the 'TowerControl' struct (defined in kirktower.go)
@@ -22,8 +23,8 @@ import (
 // MCPRequest represents a standard JSON-RPC 2.0 request from an Agent/Model
 type MCPRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
-	Method  string          `json:"method"`      // The tool name (e.g., "container_exec") OR "call_tool" for routing
-	Params  json.RawMessage `json:"params"`      // Can be: [args_map, agent_id] OR {name, arguments, agent_id}
+	Method  string          `json:"method"` // The tool name (e.g., "container_exec") OR "call_tool" for routing
+	Params  json.RawMessage `json:"params"` // Can be: [args_map, agent_id] OR {name, arguments, agent_id}
 	ID      interface{}     `json:"id"`
 }
 
@@ -37,8 +38,8 @@ type MCPResponse struct {
 
 // MCPError defines the error structure for JSON-RPC
 type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
@@ -51,19 +52,79 @@ type ToolHandler func(args map[string]interface{}, agentID string) (interface{},
 
 // MCPServer hosts the tools and enforces rules
 type MCPServer struct {
-	tower *TowerControl // Critical reference to Kirktower's main state/auditing system
-	tools map[string]ToolHandler
-	mu    sync.RWMutex
+	tower      *TowerControl // Critical reference to Kirktower's main state/auditing system
+	tools      map[string]ToolHandler
+	mu         sync.RWMutex
+	logChannel chan LogEntry  // Async channel for Diplo logging
+	wg         sync.WaitGroup // Track background goroutines
+}
+
+// LogEntry represents a structured log event sent to Diplo
+type LogEntry struct {
+	Agent     string    `json:"agent"`
+	Phase     string    `json:"phase"`
+	Content   string    `json:"content"`
+	Tool      string    `json:"tool"`
+	Timestamp time.Time `json:"timestamp"`
+	Duration  float64   `json:"duration_ms"`
+	Success   bool      `json:"success"`
 }
 
 // NewMCPServer initializes the server and registers the core tools
 func NewMCPServer(tc *TowerControl) *MCPServer {
 	s := &MCPServer{
-		tower: tc,
-		tools: make(map[string]ToolHandler),
+		tower:      tc,
+		tools:      make(map[string]ToolHandler),
+		logChannel: make(chan LogEntry, 100), // Buffered channel for async logging
 	}
 	s.registerTools()
+	s.startLogPipeline() // Start background log processor
 	return s
+}
+
+// startLogPipeline launches a background goroutine to send logs to Diplo
+func (s *MCPServer) startLogPipeline() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		for entry := range s.logChannel {
+			s.sendToDiplo(entry)
+		}
+	}()
+}
+
+// sendToDiplo transmits structured logs to Diplo's Flask endpoint
+func (s *MCPServer) sendToDiplo(entry LogEntry) {
+	diploURL := "http://127.0.0.1:8081/ingest_log"
+
+	payload := map[string]interface{}{
+		"agent":     entry.Agent,
+		"phase":     entry.Phase,
+		"content":   entry.Content,
+		"tool":      entry.Tool,
+		"timestamp": entry.Timestamp.Format(time.RFC3339),
+		"duration":  entry.Duration,
+		"success":   entry.Success,
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[Diplo Pipeline] Failed to marshal log: %v", err)
+		return
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Post(diploURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("[Diplo Pipeline] Connection failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("[Diplo Pipeline] Error response (%d): %s", resp.StatusCode, string(body))
+	}
 }
 
 // registerTools maps the Python-facing tool name to the internal Go function
@@ -84,20 +145,20 @@ func (s *MCPServer) tool_ContainerExec(args map[string]interface{}, agentID stri
 	if !ok {
 		return nil, fmt.Errorf("argument 'command' is missing or not a string")
 	}
-	
+
 	image, _ := args["image"].(string)
 	if image == "" {
 		image = "alpine/git:latest" // Default safe execution image
 	}
-	
+
 	log.Printf("[MCP AUDIT: %s] Executing command: %s", agentID, command)
 
 	// --- Execution Logic (Docker Sim) ---
 	// WARNING: In production, this command must run against a hardened container environment.
 	// We run 'sh -c' to execute the command string provided by the agent.
-	dockerCmd := exec.Command("docker", "run", "--rm", 
+	dockerCmd := exec.Command("docker", "run", "--rm",
 		"-v", fmt.Sprintf("%s:/workspace", "/path/to/josiedesk"), // Volume mount for persistence
-		"-w", "/workspace", 
+		"-w", "/workspace",
 		image, "sh", "-c", command)
 
 	out, err := dockerCmd.CombinedOutput()
@@ -111,7 +172,7 @@ func (s *MCPServer) tool_ContainerExec(args map[string]interface{}, agentID stri
 	if err != nil {
 		return outputStr, fmt.Errorf("container execution failed: %v | Output: %s", err, outputStr)
 	}
-	
+
 	return outputStr, nil
 }
 
@@ -120,17 +181,17 @@ func (s *MCPServer) tool_MemoryCommit(args map[string]interface{}, agentID strin
 	// Expected args: "log_type" string, "content" string
 	logType, ok := args["log_type"].(string)
 	content, ok2 := args["content"].(string)
-	
+
 	if !ok || !ok2 {
 		return nil, fmt.Errorf("missing or invalid arguments for memory_commit (log_type, content)")
 	}
 
 	// --- Waria Audit ---
 	log.Printf("[MCP AUDIT: %s] Memory Commit Type: %s", agentID, logType)
-	s.tower.WariaUpdate(agentID, fmt.Sprintf("MEM_COMMIT: %s", logType), 5) 
+	s.tower.WariaUpdate(agentID, fmt.Sprintf("MEM_COMMIT: %s", logType), 5)
 
 	// NOTE: In the full system, this would make an internal RPC to Diplo (D2)
-	
+
 	return fmt.Sprintf("Log of type '%s' committed to Diplo by %s. Content length: %d", logType, agentID, len(content)), nil
 }
 
@@ -140,7 +201,7 @@ func (s *MCPServer) tool_FSWriteGuarded(args map[string]interface{}, agentID str
 	path, okPath := args["path"].(string)
 	content, okContent := args["content"].(string)
 	force, _ := args["force_override"].(bool)
-	
+
 	if !okPath || !okContent {
 		return nil, fmt.Errorf("missing or invalid arguments for fs_write_guarded (path, content)")
 	}
@@ -150,23 +211,22 @@ func (s *MCPServer) tool_FSWriteGuarded(args map[string]interface{}, agentID str
 	if !force {
 		// e.g., if fileExists(path) { return nil, error("File exists. Use 'force_override: true'.") }
 	}
-	
+
 	// 2. Execution Logic (Shell command for file write, must be quoted for safety)
 	// We use `exec.Command` with a shell interpreter to handle the redirection.
-	command := fmt.Sprintf("echo %s > %s", quote(content), path) 
+	command := fmt.Sprintf("echo %s > %s", quote(content), path)
 	err := exec.Command("sh", "-c", command).Run()
 
 	if err != nil {
 		return nil, fmt.Errorf("guarded file write failed: %v", err)
 	}
-	
+
 	// --- Waria Audit ---
 	log.Printf("[MCP AUDIT: %s] Guarded Write to: %s (Force: %t)", agentID, path, force)
 	s.tower.WariaUpdate(agentID, fmt.Sprintf("FS_WRITE: %s", path), 1)
 
 	return fmt.Sprintf("Wrote %d bytes to %s. Force: %t", len(content), path, force), nil
 }
-
 
 // =============================================================================
 // 4. HTTP HANDLER (implements http.Handler)
@@ -178,16 +238,16 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed. Must use POST.", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	var req MCPRequest
-	
+
 	// Read and decode the request body (JSON-RPC)
 	body, err := io.ReadAll(r.Body)
 	if err != nil || json.Unmarshal(body, &req) != nil {
 		s.sendError(w, nil, -32700, "Parse Error: Invalid JSON or empty body", nil)
 		return
 	}
-	
+
 	if req.Method == "" {
 		s.sendError(w, req.ID, -32600, "Invalid Request: 'method' field is required", nil)
 		return
@@ -197,11 +257,11 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Support TWO call formats:
 	// Format 1: {name, arguments, agent_id} for Python hybrid calls
 	// Format 2: [args_map, agent_id_string] for direct tool calls
-	
+
 	var toolName string
 	var argsMap map[string]interface{}
 	var agentID string
-	
+
 	// First, try to parse as object (Python format)
 	var paramsObj map[string]interface{}
 	if err := json.Unmarshal(req.Params, &paramsObj); err == nil {
@@ -220,7 +280,7 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// If object parsing failed, try array format (Go format)
 	if toolName == "" {
 		var rawArgs []interface{}
@@ -228,21 +288,21 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, req.ID, -32602, "Invalid params: expected {name, arguments, agent_id} or [args_map, agent_id_string]", nil)
 			return
 		}
-		
+
 		argsMap, _ = rawArgs[0].(map[string]interface{})
 		agentID, _ = rawArgs[1].(string)
 	}
-	
+
 	// Use request Method if toolName wasn't extracted from params
 	if toolName == "" {
 		toolName = req.Method
 	}
-	
+
 	if argsMap == nil || agentID == "" {
 		s.sendError(w, req.ID, -32602, "Invalid params: missing required fields (arguments map or agent_id)", nil)
 		return
 	}
-	
+
 	// 3. Tool Lookup
 	s.mu.RLock()
 	handler, exists := s.tools[toolName]
@@ -253,10 +313,30 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Execute the Handler
+	// 4. Execute the Handler (with timing for structured logging)
+	startTime := time.Now()
 	result, execErr := handler(argsMap, agentID)
+	duration := time.Since(startTime).Seconds() * 1000 // milliseconds
 
-	// 5. Send Response
+	// 5. Send structured log to Diplo (async, non-blocking)
+	logEntry := LogEntry{
+		Agent:     agentID,
+		Phase:     "MCP_TOOL_CALL",
+		Content:   fmt.Sprintf("Tool: %s | Duration: %.2fms | Args: %v", toolName, duration, argsMap),
+		Tool:      toolName,
+		Timestamp: startTime,
+		Duration:  duration,
+		Success:   execErr == nil,
+	}
+
+	select {
+	case s.logChannel <- logEntry:
+		// Log queued successfully for async transmission to Diplo
+	default:
+		log.Printf("[MCP] Log channel full, dropping log for agent %s", agentID)
+	}
+
+	// 6. Send Response
 	if execErr != nil {
 		s.sendError(w, req.ID, -32000, "Tool Execution Error", map[string]string{"details": execErr.Error()})
 	} else {

@@ -1,5 +1,5 @@
 """
-josiedesk_memory.py - The Swarm's Long-Term Memory
+diplo.py - The Swarm's Long-Term Memory
 Managed by Diplo (D2). Powered by LlamaIndex and Flask (for MCP integration).
 """
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os/exec"
 	"sync"
 	"time"
 )
@@ -18,10 +19,10 @@ type ProcessState struct {
 	TokenCount int       `json:"token_count"` // cumulative
 	LastOutput string    `json:"last_output"`
 	// Internal control fields (not exposed via JSON)
-	Ctx        context.Context    `json:"-"`
-	Cancel     context.CancelFunc `json:"-"`
-	Cmd        interface{}        `json:"-"` // *exec.Cmd type
-	WaitChan   chan error         `json:"-"` // Channel to notify when process exits
+	Ctx      context.Context    `json:"-"`
+	Cancel   context.CancelFunc `json:"-"`
+	Cmd      *exec.Cmd          `json:"-"` // *exec.Cmd type
+	WaitChan chan error         `json:"-"` // Channel to notify when process exits
 }
 
 // WariaThreshold monitors reasoning horizon breaches
