@@ -1,0 +1,3 @@
+josiedesk_core
+josiedesk_hybrid
+josiedesk_memory

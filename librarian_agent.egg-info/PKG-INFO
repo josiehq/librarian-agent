@@ -1,0 +1,47 @@
+Metadata-Version: 2.4
+Name: librarian-agent
+Version: 0.1.0
+Summary: Multi-Agent Software Construction Swarm with JosieDesk orchestration and Kirktower control tower
+Home-page: https://github.com/josiehq/librarian-agent
+Author: JosieHQ
+Author-email: dev@josiehq.com
+License: MIT
+Project-URL: Bug Reports, https://github.com/josiehq/librarian-agent/issues
+Project-URL: Source, https://github.com/josiehq/librarian-agent
+Keywords: multi-agent,orchestration,swarm,ai,construction,llm,metagpt
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Libraries :: Application Frameworks
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: httpx>=0.24.0
+Requires-Dist: llama-index>=0.9.0
+Requires-Dist: llama-index-core>=0.1.0
+Requires-Dist: metagpt>=0.6.0
+Requires-Dist: asyncio-contextmanager>=1.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"
+Provides-Extra: go
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: license
+Dynamic: project-url
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

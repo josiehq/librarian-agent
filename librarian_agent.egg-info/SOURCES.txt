@@ -1,0 +1,9 @@
+josiedesk_core.py
+josiedesk_hybrid.py
+josiedesk_memory.py
+setup.py
+librarian_agent.egg-info/PKG-INFO
+librarian_agent.egg-info/SOURCES.txt
+librarian_agent.egg-info/dependency_links.txt
+librarian_agent.egg-info/requires.txt
+librarian_agent.egg-info/top_level.txt

@@ -14,41 +14,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// ProcessState tracks individual agent/process execution
-type ProcessState struct {
-	ID         string    `json:"id"`
-	Agent      string    `json:"agent"`
-	Phase      string    `json:"phase"`
-	Status     string    `json:"status"` // idle, running, paused, killed
-	StartTime  time.Time `json:"start_time"`
-	GPU        int       `json:"gpu"`         // GPU ID if assigned
-	VRAMUsage  float64   `json:"vram_usage"`  // GB
-	TokenCount int       `json:"token_count"` // cumulative
-	LastOutput string    `json:"last_output"`
-	Ctx        context.Context
-	Cancel     context.CancelFunc
-}
-
-// WariaThreshold monitors reasoning horizon breaches
-type WariaThreshold struct {
-	Name      string  `json:"name"`
-	Current   float64 `json:"current"`
-	Threshold float64 `json:"threshold"`
-	Breached  bool    `json:"breached"`
-}
-
-// WariaState tracks meta-cognitive hygiene
-type WariaState struct {
-	PromptLength      int              `json:"prompt_length"`
-	ContextReuse      int              `json:"context_reuse"`
-	CrossPhaseRefs    int              `json:"cross_phase_refs"`
-	ConfidencePlateau bool             `json:"confidence_plateau"`
-	VerbosityIncrease bool             `json:"verbosity_increase"`
-	Thresholds        []WariaThreshold `json:"thresholds"`
-	TipPackets        []string         `json:"tip_packets"`
-	mu                sync.RWMutex
-}
-
 // TowerControl is Kirktower's main control system
 type TowerControl struct {
 	processes map[string]*ProcessState
@@ -369,60 +334,93 @@ func (tc *TowerControl) handleWebSocket(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func (tc *TowerControl) handleCommand(cmd map[string]interface{}, conn *websocket.Conn) {
-	action := cmd["action"].(string)
+// processCommand handles both WebSocket and HTTP commands
+func (tc *TowerControl) processCommand(cmd map[string]interface{}) map[string]interface{} {
+	action, ok := cmd["action"].(string)
+	if !ok {
+		return map[string]interface{}{"error": "missing or invalid action"}
+	}
 
 	var response map[string]interface{}
 
 	switch action {
 	case "start":
-		agent := cmd["agent"].(string)
-		phase := cmd["phase"].(string)
-		gpu := int(cmd["gpu"].(float64))
-		id, err := tc.StartProcess(agent, phase, gpu)
-		if err != nil {
-			response = map[string]interface{}{"error": err.Error()}
+		agent, _ := cmd["agent"].(string)
+		phase, _ := cmd["phase"].(string)
+		gpuF, _ := cmd["gpu"].(float64)
+		gpu := int(gpuF)
+		if agent == "" || phase == "" {
+			response = map[string]interface{}{"error": "agent and phase required"}
 		} else {
-			response = map[string]interface{}{"success": true, "id": id}
+			id, err := tc.StartProcess(agent, phase, gpu)
+			if err != nil {
+				response = map[string]interface{}{"error": err.Error()}
+			} else {
+				response = map[string]interface{}{"success": true, "id": id}
+			}
 		}
 
 	case "pause":
-		id := cmd["id"].(string)
-		err := tc.PauseProcess(id)
-		if err != nil {
-			response = map[string]interface{}{"error": err.Error()}
+		id, _ := cmd["id"].(string)
+		if id == "" {
+			response = map[string]interface{}{"error": "id required"}
 		} else {
-			response = map[string]interface{}{"success": true}
+			err := tc.PauseProcess(id)
+			if err != nil {
+				response = map[string]interface{}{"error": err.Error()}
+			} else {
+				response = map[string]interface{}{"success": true}
+			}
 		}
 
 	case "resume":
-		id := cmd["id"].(string)
-		err := tc.ResumeProcess(id)
-		if err != nil {
-			response = map[string]interface{}{"error": err.Error()}
+		id, _ := cmd["id"].(string)
+		if id == "" {
+			response = map[string]interface{}{"error": "id required"}
 		} else {
-			response = map[string]interface{}{"success": true}
+			err := tc.ResumeProcess(id)
+			if err != nil {
+				response = map[string]interface{}{"error": err.Error()}
+			} else {
+				response = map[string]interface{}{"success": true}
+			}
 		}
 
 	case "kill":
-		id := cmd["id"].(string)
-		err := tc.KillProcess(id)
-		if err != nil {
-			response = map[string]interface{}{"error": err.Error()}
+		id, _ := cmd["id"].(string)
+		if id == "" {
+			response = map[string]interface{}{"error": "id required"}
 		} else {
-			response = map[string]interface{}{"success": true}
+			err := tc.KillProcess(id)
+			if err != nil {
+				response = map[string]interface{}{"error": err.Error()}
+			} else {
+				response = map[string]interface{}{"success": true}
+			}
 		}
 
 	case "kill_loop":
-		loop := cmd["loop"].(string)
-		err := tc.KillLoop(loop)
-		if err != nil {
-			response = map[string]interface{}{"error": err.Error()}
+		loop, _ := cmd["loop"].(string)
+		if loop == "" {
+			response = map[string]interface{}{"error": "loop required"}
 		} else {
-			response = map[string]interface{}{"success": true}
+			err := tc.KillLoop(loop)
+			if err != nil {
+				response = map[string]interface{}{"error": err.Error()}
+			} else {
+				response = map[string]interface{}{"success": true}
+			}
 		}
+
+	default:
+		response = map[string]interface{}{"error": "unknown action: " + action}
 	}
 
+	return response
+}
+
+func (tc *TowerControl) handleCommand(cmd map[string]interface{}, conn *websocket.Conn) {
+	response := tc.processCommand(cmd)
 	conn.WriteJSON(response)
 }
 
@@ -444,7 +442,80 @@ func (tc *TowerControl) handleWariaUpdate(w http.ResponseWriter, r *http.Request
 	}
 
 	tc.WariaUpdate(update.Agent, update.Output, update.TokenCount)
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleProcesses GET returns all processes, POST creates a new one
+func (tc *TowerControl) handleProcesses(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method == http.MethodGet {
+		tc.mu.RLock()
+		defer tc.mu.RUnlock()
+		json.NewEncoder(w).Encode(tc.processes)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			Agent string `json:"agent"`
+			Phase string `json:"phase"`
+			GPU   int    `json:"gpu"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		id, err := tc.StartProcess(req.Agent, req.Phase, req.GPU)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"id": id})
+		return
+	}
+
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleProcess GET returns a single process by ID
+func (tc *TowerControl) handleProcess(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		tc.mu.RLock()
+		ps, exists := tc.processes[id]
+		tc.mu.RUnlock()
+
+		if !exists {
+			http.Error(w, "process not found", http.StatusNotFound)
+			return
+		}
+		json.NewEncoder(w).Encode(ps)
+		return
+	}
+
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+// handleCommandHTTP allows HTTP clients to send the same commands as the WebSocket
+func (tc *TowerControl) handleCommandHTTP(w http.ResponseWriter, r *http.Request) {
+	var cmd map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	response := tc.processCommand(cmd)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func main() {
@@ -453,6 +524,9 @@ func main() {
 	// REST API
 	http.HandleFunc("/api/state", tower.handleState)
 	http.HandleFunc("/api/waria", tower.handleWariaUpdate)
+	http.HandleFunc("/api/command", tower.handleCommandHTTP)
+	http.HandleFunc("/api/processes", tower.handleProcesses)
+	http.HandleFunc("/api/processes/{id}", tower.handleProcess)
 
 	// WebSocket for real-time updates
 	http.HandleFunc("/ws", tower.handleWebSocket)

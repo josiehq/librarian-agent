@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -42,44 +41,6 @@ var (
 			BorderForeground(lipgloss.Color("#444444")).
 			Padding(1, 2)
 )
-
-type SystemState struct {
-	ActiveProcesses int                      `json:"active_processes"`
-	TotalProcesses  int                      `json:"total_processes"`
-	TotalVRAM       float64                  `json:"total_vram"`
-	TotalTokens     int                      `json:"total_tokens"`
-	Processes       map[string]*ProcessState `json:"processes"`
-	Waria           *WariaState              `json:"waria"`
-}
-
-type ProcessState struct {
-	ID         string    `json:"id"`
-	Agent      string    `json:"agent"`
-	Phase      string    `json:"phase"`
-	Status     string    `json:"status"`
-	StartTime  time.Time `json:"start_time"`
-	GPU        int       `json:"gpu"`
-	VRAMUsage  float64   `json:"vram_usage"`
-	TokenCount int       `json:"token_count"`
-	LastOutput string    `json:"last_output"`
-}
-
-type WariaState struct {
-	PromptLength      int              `json:"prompt_length"`
-	ContextReuse      int              `json:"context_reuse"`
-	CrossPhaseRefs    int              `json:"cross_phase_refs"`
-	ConfidencePlateau bool             `json:"confidence_plateau"`
-	VerbosityIncrease bool             `json:"verbosity_increase"`
-	Thresholds        []WariaThreshold `json:"thresholds"`
-	TipPackets        []string         `json:"tip_packets"`
-}
-
-type WariaThreshold struct {
-	Name      string  `json:"name"`
-	Current   float64 `json:"current"`
-	Threshold float64 `json:"threshold"`
-	Breached  bool    `json:"breached"`
-}
 
 type model struct {
 	ws            *websocket.Conn
