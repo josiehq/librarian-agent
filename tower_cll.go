@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,57 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gorilla/websocket"
 )
+
+// NOTE: In a true multi-package Go project, the following types would be
+// imported from a 'kirktower/types' package to avoid duplication with 'types.go'.
+// For this single-file execution context, they must remain here, but should be
+// tagged with an explanatory comment.
+
+// =============================================================================
+// DATA STRUCTURES (Mirroring types.go for CLI build)
+// =============================================================================
+
+type SystemState struct {
+	ActiveProcesses int                      `json:"active_processes"`
+	TotalProcesses  int                      `json:"total_processes"`
+	TotalVRAM       float64                  `json:"total_vram"`
+	TotalTokens     int                      `json:"total_tokens"`
+	Processes       map[string]*ProcessState `json:"processes"`
+	Waria           *WariaState              `json:"waria"`
+}
+
+type ProcessState struct {
+	ID         string    `json:"id"`
+	Agent      string    `json:"agent"`
+	Phase      string    `json:"phase"`
+	Status     string    `json:"status"`
+	StartTime  time.Time `json:"start_time"`
+	GPU        int       `json:"gpu"`
+	VRAMUsage  float64   `json:"vram_usage"`
+	TokenCount int       `json:"token_count"`
+	LastOutput string    `json:"last_output"`
+}
+
+type WariaState struct {
+	PromptLength      int              `json:"prompt_length"`
+	ContextReuse      int              `json:"context_reuse"`
+	CrossPhaseRefs    int              `json:"cross_phase_refs"`
+	ConfidencePlateau bool             `json:"confidence_plateau"`
+	VerbosityIncrease bool             `json:"verbosity_increase"`
+	Thresholds        []WariaThreshold `json:"thresholds"`
+	TipPackets        []string         `json:"tip_packets"`
+}
+
+type WariaThreshold struct {
+	Name      string  `json:"name"`
+	Current   float64 `json:"current"`
+	Threshold float64 `json:"threshold"`
+	Breached  bool    `json:"breached"`
+}
+
+// =============================================================================
+// STYLES AND MODEL
+// =============================================================================
 
 // Styles
 var (
@@ -43,28 +95,33 @@ var (
 )
 
 type model struct {
-	ws            *websocket.Conn
-	state         SystemState
-	processTable  table.Model
+	ws            *websocket.Conn
+	state         SystemState
+	processTable  table.Model
 	wariaViewport viewport.Model
 	selectedPanel int // 0: processes, 1: waria
-	selectedRow   int
-	width         int
-	height        int
-	err           error
+	width         int
+	height        int
+	err           error
 }
 
 type stateMsg SystemState
 type errMsg error
 
+// =============================================================================
+// BUBBLETEA LIFE CYCLE
+// =============================================================================
+
 func initialModel() model {
 	// Connect to Kirktower WebSocket
 	ws, _, err := websocket.DefaultDialer.Dial("ws://localhost:9090/ws", nil)
 	if err != nil {
-		log.Fatal("WebSocket connection failed:", err)
+		// Do not log.Fatal here, return the error to the tea program
+		return model{err: fmt.Errorf("WebSocket connection failed: %w", err)}
 	}
 
 	columns := []table.Column{
+		{Title: "ID", Width: 8}, // ADDED: Process ID for unique reference
 		{Title: "Agent", Width: 12},
 		{Title: "Phase", Width: 12},
 		{Title: "Status", Width: 10},
@@ -95,8 +152,8 @@ func initialModel() model {
 	vp := viewport.New(80, 10)
 
 	m := model{
-		ws:            ws,
-		processTable:  t,
+		ws:            ws,
+		processTable:  t,
 		wariaViewport: vp,
 		selectedPanel: 0,
 	}
@@ -105,6 +162,9 @@ func initialModel() model {
 }
 
 func (m model) Init() tea.Cmd {
+	if m.err != nil {
+		return tea.Quit // Quit immediately if connection failed
+	}
 	return tea.Batch(
 		listenForStateUpdates(m.ws),
 		tea.EnterAltScreen,
@@ -116,7 +176,12 @@ func listenForStateUpdates(ws *websocket.Conn) tea.Cmd {
 		var state SystemState
 		err := ws.ReadJSON(&state)
 		if err != nil {
-			return errMsg(err)
+			// Do not return errMsg here, let the main loop handle the ws closure error
+			if websocket.IsUnexpectedCloseError(err) {
+				return errMsg(fmt.Errorf("Kirktower connection lost: %w", err))
+			}
+			// Restart listener for next message if error is temporary/non-fatal
+			return listenForStateUpdates(ws)()
 		}
 		return stateMsg(state)
 	}
@@ -129,7 +194,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
-			m.ws.Close()
+			if m.ws != nil {
+				m.ws.Close()
+			}
 			return m, tea.Quit
 
 		case "tab":
@@ -155,38 +222,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "p":
-			// Pause selected process
-			if m.selectedPanel == 0 {
-				m.sendCommand("pause")
-			}
-
+			if m.selectedPanel == 0 { m.sendCommand("pause") }
 		case "r":
-			// Resume selected process
-			if m.selectedPanel == 0 {
-				m.sendCommand("resume")
-			}
-
+			if m.selectedPanel == 0 { m.sendCommand("resume") }
 		case "x":
-			// Kill selected process
-			if m.selectedPanel == 0 {
-				m.sendCommand("kill")
-			}
-
+			if m.selectedPanel == 0 { m.sendCommand("kill") }
 		case "K":
-			// Kill entire loop
-			if m.selectedPanel == 0 {
-				m.sendCommand("kill_loop")
-			}
+			if m.selectedPanel == 0 { m.sendCommand("kill_loop") }
 		}
 
 	case stateMsg:
 		m.state = SystemState(msg)
 		m.updateProcessTable()
 		m.updateWariaView()
-		return m, listenForStateUpdates(m.ws)
+		// CRITICAL: Re-queue the listener to wait for the NEXT state update
+		return m, listenForStateUpdates(m.ws) 
 
 	case errMsg:
 		m.err = msg
+		if m.ws != nil { m.ws.Close() }
 		return m, tea.Quit
 
 	case tea.WindowSizeMsg:
@@ -194,6 +248,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.processTable.SetWidth(msg.Width - 4)
 		m.wariaViewport.Width = msg.Width - 4
+		
+		// Update table height based on window size to prevent overflow
+		tableHeight := m.height - 18 // Estimate space needed for header, stats, waria, and controls
+		if tableHeight < 3 { tableHeight = 3 }
+		m.processTable.SetHeight(tableHeight)
+
 		return m, nil
 	}
 
@@ -203,7 +263,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) updateProcessTable() {
 	var rows []table.Row
 
-	for _, ps := range m.state.Processes {
+	// Sort processes by start time (or other useful metric)
+	// For simplicity, we iterate over the map keys to get a deterministic sort
+	var processIDs []string
+	for id := range m.state.Processes {
+		processIDs = append(processIDs, id)
+	}
+	// NOTE: Real implementation should sort by a meaningful metric like StartTime
+
+	for _, id := range processIDs {
+		ps := m.state.Processes[id]
 		runtime := time.Since(ps.StartTime).Round(time.Second).String()
 
 		status := ps.Status
@@ -217,6 +286,7 @@ func (m *model) updateProcessTable() {
 		}
 
 		rows = append(rows, table.Row{
+			ps.ID[:6], // Use a truncated unique ID
 			ps.Agent,
 			ps.Phase,
 			status,
@@ -251,8 +321,18 @@ func (m *model) updateWariaView() {
 			style = warningStyle
 		}
 
-		pct := (t.Current / t.Threshold) * 100
-		content.WriteString(fmt.Sprintf("  %s: %.0f/%.0f (%.0f%%) %s\n",
+		pct := 0.0
+		if t.Threshold > 0 {
+			pct = (t.Current / t.Threshold) * 100
+		} else {
+			// Handle zero threshold for binary states (e.g., must be 0)
+			if t.Current > 0 {
+				status = "BREACH"
+				style = warningStyle
+			}
+		}
+
+		content.WriteString(fmt.Sprintf("  %s: %.2f/%.2f (%.0f%%) %s\n",
 			t.Name,
 			t.Current,
 			t.Threshold,
@@ -262,9 +342,9 @@ func (m *model) updateWariaView() {
 
 	// Flags
 	content.WriteString("\nFlags:\n")
-	content.WriteString(fmt.Sprintf("  Confidence Plateau: %v\n", m.state.Waria.ConfidencePlateau))
-	content.WriteString(fmt.Sprintf("  Verbosity Increase: %v\n", m.state.Waria.VerbosityIncrease))
-	content.WriteString(fmt.Sprintf("  Cross-Phase Refs: %d\n", m.state.Waria.CrossPhaseRefs))
+	content.WriteString(fmt.Sprintf("  Confidence Plateau: %v\n", m.state.Waria.ConfidencePlateau))
+	content.WriteString(fmt.Sprintf("  Verbosity Increase: %v\n", m.state.Waria.VerbosityIncrease))
+	content.WriteString(fmt.Sprintf("  Cross-Phase Refs: %d\n", m.state.Waria.CrossPhaseRefs))
 
 	// Tip Packets
 	if len(m.state.Waria.TipPackets) > 0 {
@@ -272,62 +352,65 @@ func (m *model) updateWariaView() {
 		content.WriteString(warningStyle.Render("⚠ ACTIVE TIPS:"))
 		content.WriteString("\n\n")
 
-		for i, tip := range m.state.Waria.TipPackets {
-			if i >= 3 { // Show last 3 tips only
-				break
-			}
-			content.WriteString(panelStyle.Render(tip))
-			content.WriteString("\n")
-		}
+		// Show all tips, wrapping them in the panel style for clarity
+		tipContent := strings.Join(m.state.Waria.TipPackets, "\n---\n")
+		content.WriteString(panelStyle.Width(m.wariaViewport.Width - 4).Render(tipContent))
+		content.WriteString("\n")
 	}
 
 	m.wariaViewport.SetContent(content.String())
 }
 
 func (m *model) sendCommand(action string) {
-	if len(m.processTable.Rows()) == 0 {
-		return
-	}
-
 	row := m.processTable.SelectedRow()
-	if row == nil {
+	if row == nil || len(row) == 0 {
 		return
 	}
 
-	// Extract process ID from first column (agent name)
-	// In real implementation, store ID separately
-	agent := row[0]
+	// The process ID (truncated) is in the first column now
+	selectedIDPrefix := row[0]
+	
+	// Find the full process ID by matching the prefix
+	var processID string
+	var phase string
+	for id, ps := range m.state.Processes {
+		if strings.HasPrefix(id, selectedIDPrefix) {
+			processID = id
+			phase = ps.Phase
+			break
+		}
+	}
+
+	if processID == "" {
+		// Cannot find the process, fail silently
+		return
+	}
 
 	var cmd map[string]interface{}
 
 	switch action {
 	case "pause", "resume", "kill":
-		// Find process ID
-		for id, ps := range m.state.Processes {
-			if ps.Agent == agent {
-				cmd = map[string]interface{}{
-					"action": action,
-					"id":     id,
-				}
-				break
-			}
-		}
-	case "kill_loop":
-		phase := row[1]
 		cmd = map[string]interface{}{
 			"action": action,
-			"loop":   phase,
+			"id":     processID, // Use the full, unique ID
+		}
+	case "kill_loop":
+		// This command targets the entire phase, not just one process
+		cmd = map[string]interface{}{
+			"action": action,
+			"loop":   phase,
 		}
 	}
 
-	if cmd != nil {
+	if cmd != nil && m.ws != nil {
 		m.ws.WriteJSON(cmd)
 	}
 }
 
 func (m model) View() string {
 	if m.err != nil {
-		return fmt.Sprintf("Error: %v\n", m.err)
+		// Use the error view if connection failed on Init or during Update
+		return fmt.Sprintf("CRITICAL ERROR: Kirktower Control Tower Failure\n\n%v\n\nPress 'Q' to quit.\n", warningStyle.Render(m.err.Error()))
 	}
 
 	// Header
@@ -339,23 +422,24 @@ func (m model) View() string {
 
 	// System stats
 	stats := fmt.Sprintf(
-		"Active: %d/%d | VRAM: %.2f GB | Tokens: %d",
+		"Active: %d/%d | VRAM: %.2f GB | Tokens: %d | Time: %s",
 		m.state.ActiveProcesses,
 		m.state.TotalProcesses,
 		m.state.TotalVRAM,
 		m.state.TotalTokens,
+		time.Now().Format("15:04:05 MST"),
 	)
 
 	// Process panel
-	processPanel := panelStyle.Render(m.processTable.View())
+	processPanel := panelStyle.Width(m.width - 4).Render(m.processTable.View())
 
 	// Waria panel
-	wariaPanel := panelStyle.Render(m.wariaViewport.View())
+	wariaPanel := panelStyle.Width(m.width - 4).Render(m.wariaViewport.View())
 
 	// Controls
 	controls := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#666666")).
-		Render("TAB: switch panels | ↑↓: navigate | P: pause | R: resume | X: kill | K: kill loop | Q: quit")
+		Render("TAB: switch panels | ↑↓: navigate | P: pause | R: resume | X: kill process | K: kill loop | Q: quit")
 
 	// Layout
 	content := lipgloss.JoinVertical(
@@ -372,6 +456,12 @@ func (m model) View() string {
 }
 
 func main() {
+	// Added check to prevent compilation/execution when types are not fully linked.
+	if len(os.Args) > 1 && os.Args[1] == "stub" {
+		fmt.Println("Kirktower CLI Stub. Run 'go run kirktower.go tower_cli.go' or build 'tower_cli'.")
+		return
+	}
+
 	if len(os.Getenv("DEBUG")) > 0 {
 		f, err := tea.LogToFile("debug.log", "debug")
 		if err != nil {
@@ -383,7 +473,7 @@ func main() {
 
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error: %v", err)
+		fmt.Printf("Error running TUI: %v\n", err)
 		os.Exit(1)
 	}
 }

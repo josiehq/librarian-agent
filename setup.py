@@ -26,13 +26,14 @@ setup(
     install_requires=[
         # Core dependencies
         "httpx>=0.24.0",
+        "flask>=2.3.0",
         
         # LLM and knowledge base
         "llama-index>=0.9.0",
         "llama-index-core>=0.1.0",
         
         # Multi-agent orchestration
-        "metagpt>=0.6.0",
+        "pyautogen>=0.2.0",
         
         # Async and utilities
         "asyncio-contextmanager>=1.0.0",

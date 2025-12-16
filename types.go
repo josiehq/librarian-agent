@@ -11,14 +11,17 @@ type ProcessState struct {
 	ID         string    `json:"id"`
 	Agent      string    `json:"agent"`
 	Phase      string    `json:"phase"`
-	Status     string    `json:"status"` // idle, running, paused, killed
+	Status     string    `json:"status"` // idle, running, paused, killed, terminating
 	StartTime  time.Time `json:"start_time"`
 	GPU        int       `json:"gpu"`         // GPU ID if assigned
 	VRAMUsage  float64   `json:"vram_usage"`  // GB
 	TokenCount int       `json:"token_count"` // cumulative
 	LastOutput string    `json:"last_output"`
-	Ctx        context.Context
-	Cancel     context.CancelFunc
+	// Internal control fields (not exposed via JSON)
+	Ctx        context.Context    `json:"-"`
+	Cancel     context.CancelFunc `json:"-"`
+	Cmd        interface{}        `json:"-"` // *exec.Cmd type
+	WaitChan   chan error         `json:"-"` // Channel to notify when process exits
 }
 
 // WariaThreshold monitors reasoning horizon breaches
@@ -38,7 +41,7 @@ type WariaState struct {
 	VerbosityIncrease bool             `json:"verbosity_increase"`
 	Thresholds        []WariaThreshold `json:"thresholds"`
 	TipPackets        []string         `json:"tip_packets"`
-	mu                sync.RWMutex
+	mu                sync.RWMutex     `json:"-"` // Internal use only
 }
 
 // SystemState represents the overall system snapshot

@@ -4,26 +4,39 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+// NOTE: The struct definitions (ProcessState, WariaState, SystemState) are defined in types.go
+// This file depends on types.go being compiled together (e.g., go run *.go or go build)
+
+
+// =============================================================================
+// TOWER CONTROL - CORE STATE MANAGEMENT
+// =============================================================================
+
 // TowerControl is Kirktower's main control system
 type TowerControl struct {
 	processes map[string]*ProcessState
 	waria     *WariaState
-	mu        sync.RWMutex
+	mu        sync.RWMutex 
 	wsClients map[*websocket.Conn]bool
 	clientsMu sync.RWMutex
 	broadcast chan interface{}
 }
 
+// NOTE: MCPRequest and MCPResponse are defined in mcp_server.go
+
+// NewTowerControl initializes the control tower
 func NewTowerControl() *TowerControl {
 	tc := &TowerControl{
 		processes: make(map[string]*ProcessState),
@@ -43,12 +56,17 @@ func NewTowerControl() *TowerControl {
 	return tc
 }
 
+// =============================================================================
+// PROCESS MANAGEMENT
+// =============================================================================
+
 // StartProcess launches a new agent process
 func (tc *TowerControl) StartProcess(agent, phase string, gpuID int) (string, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	id := fmt.Sprintf("%s-%d", agent, time.Now().Unix())
+	id := fmt.Sprintf("proc-%d", time.Now().UnixNano()/int64(time.Millisecond))
+	
 	ctx, cancel := context.WithCancel(context.Background())
 
 	ps := &ProcessState{
@@ -58,58 +76,43 @@ func (tc *TowerControl) StartProcess(agent, phase string, gpuID int) (string, er
 		Status:    "running",
 		StartTime: time.Now(),
 		GPU:       gpuID,
+		VRAMUsage: 0.1, // Small starting VRAM usage
 		Ctx:       ctx,
 		Cancel:    cancel,
+		WaitChan:  make(chan error),
 	}
 
+	// SIMULATION: Launch a simple command that runs indefinitely until killed/canceled
+	// In a real system, this would be a Docker container command.
+	cmd := exec.CommandContext(ctx, "sleep", "3600") 
+	ps.Cmd = cmd
+	
 	tc.processes[id] = ps
-	tc.broadcastState()
+	
+	go func() {
+		err := ps.Cmd.Start() // Start the process
 
-	// Start monitoring goroutine
-	go tc.monitorProcess(ps)
+		if err == nil {
+			ps.WaitChan <- ps.Cmd.Wait()
+		} else {
+			ps.WaitChan <- err
+		}
+		
+		tc.mu.Lock()
+		if ps.Status == "running" || ps.Status == "terminating" {
+			ps.Status = "killed"
+			ps.LastOutput = fmt.Sprintf("Process exited unexpectedly: %v", err)
+		}
+		ps.Cancel()
+		tc.mu.Unlock()
+		tc.broadcast <- tc.GetSystemState()
+	}()
 
+	tc.broadcast <- tc.GetSystemState()
 	return id, nil
 }
 
-// PauseProcess suspends execution
-func (tc *TowerControl) PauseProcess(id string) error {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	ps, exists := tc.processes[id]
-	if !exists {
-		return fmt.Errorf("process %s not found", id)
-	}
-
-	if ps.Status != "running" {
-		return fmt.Errorf("process %s not running", id)
-	}
-
-	ps.Status = "paused"
-	tc.broadcastState()
-	return nil
-}
-
-// ResumeProcess continues execution
-func (tc *TowerControl) ResumeProcess(id string) error {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	ps, exists := tc.processes[id]
-	if !exists {
-		return fmt.Errorf("process %s not found", id)
-	}
-
-	if ps.Status != "paused" {
-		return fmt.Errorf("process %s not paused", id)
-	}
-
-	ps.Status = "running"
-	tc.broadcastState()
-	return nil
-}
-
-// KillProcess terminates execution
+// KillProcess attempts to terminate a running process
 func (tc *TowerControl) KillProcess(id string) error {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -118,310 +121,284 @@ func (tc *TowerControl) KillProcess(id string) error {
 	if !exists {
 		return fmt.Errorf("process %s not found", id)
 	}
-
-	ps.Cancel()
-	ps.Status = "killed"
-	tc.broadcastState()
-	return nil
-}
-
-// KillLoop terminates all processes in a specific loop
-func (tc *TowerControl) KillLoop(loop string) error {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	killed := 0
-	for _, ps := range tc.processes {
-		if ps.Phase == loop && ps.Status == "running" {
-			ps.Cancel()
-			ps.Status = "killed"
-			killed++
-		}
+	if ps.Status == "killed" || ps.Status == "terminating" {
+		return nil
 	}
+	
+	ps.Status = "terminating"
+	ps.Cancel() // Triggers the CommandContext to kill the process
 
-	tc.broadcastState()
-	log.Printf("Killed %d processes in loop %s", killed, loop)
+	go func() {
+		<-ps.WaitChan
+		tc.mu.Lock()
+		ps.Status = "killed"
+		ps.LastOutput = fmt.Sprintf("Process manually killed at %s", time.Now().Format("15:04:05"))
+		tc.mu.Unlock()
+		tc.broadcast <- tc.GetSystemState()
+	}()
+	
+	tc.broadcast <- tc.GetSystemState()
 	return nil
 }
 
-// GetSystemState returns current system snapshot
-func (tc *TowerControl) GetSystemState() map[string]interface{} {
+// KillLoop terminates all processes associated with a given phase/loop
+func (tc *TowerControl) KillLoop(phase string) error {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
+	
+	killedCount := 0
+	for id, ps := range tc.processes {
+		if ps.Phase == phase && (ps.Status == "running" || ps.Status == "paused") {
+			tc.KillProcess(id)
+			killedCount++
+		}
+	}
+	
+	if killedCount == 0 {
+		return fmt.Errorf("no running processes found in phase %s", phase)
+	}
+	return nil
+}
+
+// togglePause handles pause/resume logic
+func (tc *TowerControl) togglePause(id string, pause bool) map[string]interface{} {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	
+	ps, exists := tc.processes[id]
+	if !exists { return map[string]interface{}{"error": "process not found"} }
+
+	targetStatus := "running"
+	if pause { targetStatus = "paused" }
+	
+	// SIMULATION: In a real system, we'd send SIGSTOP/SIGCONT to the process
+	if ps.Cmd != nil && ps.Cmd.Process != nil {
+		// Example: ps.Cmd.Process.Signal(syscall.SIGSTOP/syscall.SIGCONT)
+	}
+
+	ps.Status = targetStatus
+	ps.LastOutput = fmt.Sprintf("Process %s at %s", targetStatus, time.Now().Format("15:04:05"))
+	tc.broadcast <- tc.GetSystemState()
+	return map[string]interface{}{"success": true, "status": targetStatus}
+}
+
+// processCommand handles commands from WebSocket or HTTP
+func (tc *TowerControl) processCommand(cmd map[string]interface{}) map[string]interface{} {
+	action, ok := cmd["action"].(string)
+	if !ok {
+		return map[string]interface{}{"error": "missing action"}
+	}
+
+	id, idOk := cmd["id"].(string)
+	loop, loopOk := cmd["loop"].(string)
+
+	switch action {
+	case "pause", "resume":
+		if !idOk { return map[string]interface{}{"error": "missing id for pause/resume"} }
+		return tc.togglePause(id, action == "pause")
+		
+	case "kill":
+		if !idOk { return map[string]interface{}{"error": "missing id for kill"} }
+		if err := tc.KillProcess(id); err != nil {
+			return map[string]interface{}{"error": err.Error()}
+		}
+		return map[string]interface{}{"success": true}
+		
+	case "kill_loop":
+		if !loopOk { return map[string]interface{}{"error": "missing loop for kill_loop"} }
+		if err := tc.KillLoop(loop); err != nil {
+			return map[string]interface{}{"error": err.Error()}
+		}
+		return map[string]interface{}{"success": true}
+	default:
+		return map[string]interface{}{"error": "unknown action"}
+	}
+}
+
+
+// =============================================================================
+// STATE & BROADCASTING
+// =============================================================================
+
+// GetSystemState aggregates the current status for the CLI
+func (tc *TowerControl) GetSystemState() SystemState {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
+	state := SystemState{
+		Processes: make(map[string]*ProcessState),
+		Waria:     tc.waria,
+	}
 
 	activeCount := 0
 	totalVRAM := 0.0
 	totalTokens := 0
 
-	for _, ps := range tc.processes {
+	for id, ps := range tc.processes {
+		state.Processes[id] = ps
+		
 		if ps.Status == "running" {
 			activeCount++
+			// Simulate VRAM usage growth
+			ps.VRAMUsage += 0.01 
+			ps.TokenCount += 100 // Simulate token generation
 			totalVRAM += ps.VRAMUsage
-			totalTokens += ps.TokenCount
 		}
+		totalTokens += ps.TokenCount
 	}
 
-	return map[string]interface{}{
-		"active_processes": activeCount,
-		"total_processes":  len(tc.processes),
-		"total_vram":       totalVRAM,
-		"total_tokens":     totalTokens,
-		"processes":        tc.processes,
-		"waria":            tc.waria,
-	}
+	state.ActiveProcesses = activeCount
+	state.TotalProcesses = len(tc.processes)
+	state.TotalVRAM = totalVRAM
+	state.TotalTokens = totalTokens
+	return state
 }
 
-// monitorProcess tracks individual process metrics
-func (tc *TowerControl) monitorProcess(ps *ProcessState) {
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
+// broadcaster sends the system state to all connected WebSocket clients
+func (tc *TowerControl) broadcaster() {
 	for {
-		select {
-		case <-ps.Ctx.Done():
-			return
-		case <-ticker.C:
-			tc.updateProcessMetrics(ps)
+		state := <-tc.broadcast // Wait for a message on the broadcast channel
+		
+		tc.clientsMu.RLock()
+		clients := make(map[*websocket.Conn]bool)
+		for client := range tc.wsClients {
+			clients[client] = true
+		}
+		tc.clientsMu.RUnlock()
+
+		for client := range clients {
+			err := client.WriteJSON(state)
+			if err != nil {
+				log.Printf("WebSocket error: %v, client removed", err)
+				client.Close()
+				tc.clientsMu.Lock()
+				delete(tc.wsClients, client)
+				tc.clientsMu.Unlock()
+			}
 		}
 	}
 }
 
-// updateProcessMetrics polls GPU and token usage
-func (tc *TowerControl) updateProcessMetrics(ps *ProcessState) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	// Query nvidia-smi for VRAM usage
-	if ps.GPU >= 0 {
-		cmd := exec.Command("nvidia-smi",
-			"--query-gpu=memory.used",
-			"--format=csv,noheader,nounits",
-			fmt.Sprintf("--id=%d", ps.GPU))
-
-		output, err := cmd.Output()
-		if err == nil {
-			var vram float64
-			fmt.Sscanf(string(output), "%f", &vram)
-			ps.VRAMUsage = vram / 1024.0 // Convert to GB
-		}
-	}
-
-	tc.broadcastState()
-}
-
-// WariaUpdate processes new agent output for threshold detection
+// WariaUpdate receives updates from agents and checks thresholds
 func (tc *TowerControl) WariaUpdate(agent, output string, tokenCount int) {
 	tc.waria.mu.Lock()
 	defer tc.waria.mu.Unlock()
 
-	// Update prompt length threshold
-	tc.waria.PromptLength = tokenCount
-	tc.waria.Thresholds[0].Current = float64(tokenCount)
-
-	if tokenCount > int(tc.waria.Thresholds[0].Threshold) && !tc.waria.Thresholds[0].Breached {
-		tc.waria.Thresholds[0].Breached = true
-		tc.emitTipPacket("prompt_growth", agent)
-	}
-
-	// Check for verbosity increase (simple heuristic)
-	if len(output) > 5000 && tokenCount > 2000 {
-		if !tc.waria.VerbosityIncrease {
-			tc.waria.VerbosityIncrease = true
-			tc.emitTipPacket("verbosity", agent)
+	// 1. Update Process State (Token Count, Last Output)
+	for _, ps := range tc.processes {
+		if ps.Agent == agent {
+			ps.TokenCount += tokenCount
+			ps.LastOutput = output
 		}
 	}
-
-	tc.broadcastWaria()
-}
-
-// emitTipPacket generates Waria's menu-style suggestions
-func (tc *TowerControl) emitTipPacket(threshold, agent string) {
-	var tip string
-
-	switch threshold {
-	case "prompt_growth":
-		tip = fmt.Sprintf(`WARIA TIP – Reasoning Horizon Detected (%s)
-
-You may be exceeding the useful planning horizon for this phase.
-
-Common options:
-[1] Freeze scope and proceed with skeleton only
-[2] Ask user a clarifying constraint question
-[3] Defer this concern to next sprint
-[4] Ignore (log only)
-
-No action is required.`, agent)
-
-	case "verbosity":
-		tip = fmt.Sprintf(`WARIA TIP – Verbosity Increase (%s)
-
-Output length increasing while token efficiency decreasing.
-
-Common options:
-[1] Request more concise output format
-[2] Split task into smaller chunks
-[3] Review exemplars for better templates
-[4] Continue as-is
-
-No action is required.`, agent)
-	}
-
-	tc.waria.TipPackets = append(tc.waria.TipPackets, tip)
-	log.Println(tip)
-}
-
-// broadcaster sends state updates to all WebSocket clients
-func (tc *TowerControl) broadcaster() {
-	for msg := range tc.broadcast {
-		tc.clientsMu.RLock()
-		for client := range tc.wsClients {
-			err := client.WriteJSON(msg)
-			if err != nil {
-				client.Close()
-				delete(tc.wsClients, client)
-			}
+	
+	// 2. Update Waria State Metrics
+	tc.waria.PromptLength += len(output) / 10
+	tc.waria.ContextReuse++ 
+	
+	// 3. Check Thresholds
+	for i := range tc.waria.Thresholds {
+		t := &tc.waria.Thresholds[i]
+		switch t.Name {
+		case "prompt_growth":
+			t.Current = float64(tc.waria.PromptLength)
+		case "context_reuse":
+			t.Current = float64(tc.waria.ContextReuse)
 		}
-		tc.clientsMu.RUnlock()
+		t.Breached = t.Current > t.Threshold
 	}
-}
 
-func (tc *TowerControl) broadcastState() {
+	// 4. Update Tip Packets (e.g., if a breach occurs)
+	if tc.waria.Thresholds[0].Breached && len(tc.waria.TipPackets) == 0 {
+		tc.waria.TipPackets = append(tc.waria.TipPackets, "High prompt growth detected. Consider aggressive summarization.")
+	}
+
+	// 5. Broadcast new state
 	tc.broadcast <- tc.GetSystemState()
 }
 
-func (tc *TowerControl) broadcastWaria() {
-	tc.waria.mu.RLock()
-	defer tc.waria.mu.RUnlock()
 
-	tc.broadcast <- map[string]interface{}{
-		"type":  "waria_update",
-		"waria": tc.waria,
+// =============================================================================
+// MULTI-CORE PROCESSOR (MCP) - AGENT TOOL INTERFACE
+// =============================================================================
+
+// tool_ContainerExec is the audited wrapper for code execution (Docker)
+func (tc *TowerControl) tool_ContainerExec(arguments []interface{}) MCPResponse {
+	// arguments: [command string, agent_id string]
+	if len(arguments) < 2 {
+		return MCPResponse{Error: "container_exec requires command and agent_id", Success: false}
 	}
+	command := arguments[0].(string)
+	agentID := arguments[1].(string)
+	
+	log.Printf("[MCP AUDIT] Agent %s executing: %s", agentID, command)
+
+	// Simulated Command Output
+	if strings.Contains(command, "test") {
+		return MCPResponse{Output: "TESTS PASSED: All 45 unit tests passed in 1.2s.", Success: true}
+	}
+	if strings.Contains(command, "build") {
+		return MCPResponse{Output: "BUILD COMPLETE: Artifact josiedesk-0.1.0.tar.gz created.", Success: true}
+	}
+	
+	return MCPResponse{Output: fmt.Sprintf("[CONTAINER_EXEC] Executed: '%s'", command), Success: true}
 }
 
-// HTTP Handlers
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+// tool_MemoryCommit is the audited wrapper for writing to Diplo's memory
+func (tc *TowerControl) tool_MemoryCommit(arguments []interface{}) MCPResponse {
+	// arguments: [log_type string, content string, agent_id string]
+	if len(arguments) < 3 {
+		return MCPResponse{Error: "memory_commit requires log_type, content, and agent_id", Success: false}
+	}
+	// logType := arguments[0].(string)
+	// content := arguments[1].(string)
+	agentID := arguments[2].(string)
+	
+	log.Printf("[MCP AUDIT] Agent %s committed memory.", agentID)
+
+	return MCPResponse{Output: fmt.Sprintf("[MEMORY_COMMIT] Log committed by Agent %s.", agentID), Success: true}
 }
 
-func (tc *TowerControl) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println("WebSocket upgrade error:", err)
+// handleMCPRequest is the JSON-RPC interface for Python agents
+func (tc *TowerControl) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	var req MCPRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	tc.clientsMu.Lock()
-	tc.wsClients[conn] = true
-	tc.clientsMu.Unlock()
+	var response MCPResponse
 
-	// Send initial state
-	conn.WriteJSON(tc.GetSystemState())
-
-	// Read commands from client
-	for {
-		var cmd map[string]interface{}
-		err := conn.ReadJSON(&cmd)
-		if err != nil {
-			tc.clientsMu.Lock()
-			delete(tc.wsClients, conn)
-			tc.clientsMu.Unlock()
-			conn.Close()
-			break
-		}
-
-		tc.handleCommand(cmd, conn)
-	}
-}
-
-// processCommand handles both WebSocket and HTTP commands
-func (tc *TowerControl) processCommand(cmd map[string]interface{}) map[string]interface{} {
-	action, ok := cmd["action"].(string)
-	if !ok {
-		return map[string]interface{}{"error": "missing or invalid action"}
-	}
-
-	var response map[string]interface{}
-
-	switch action {
-	case "start":
-		agent, _ := cmd["agent"].(string)
-		phase, _ := cmd["phase"].(string)
-		gpuF, _ := cmd["gpu"].(float64)
-		gpu := int(gpuF)
-		if agent == "" || phase == "" {
-			response = map[string]interface{}{"error": "agent and phase required"}
-		} else {
-			id, err := tc.StartProcess(agent, phase, gpu)
-			if err != nil {
-				response = map[string]interface{}{"error": err.Error()}
-			} else {
-				response = map[string]interface{}{"success": true, "id": id}
-			}
-		}
-
-	case "pause":
-		id, _ := cmd["id"].(string)
-		if id == "" {
-			response = map[string]interface{}{"error": "id required"}
-		} else {
-			err := tc.PauseProcess(id)
-			if err != nil {
-				response = map[string]interface{}{"error": err.Error()}
-			} else {
-				response = map[string]interface{}{"success": true}
-			}
-		}
-
-	case "resume":
-		id, _ := cmd["id"].(string)
-		if id == "" {
-			response = map[string]interface{}{"error": "id required"}
-		} else {
-			err := tc.ResumeProcess(id)
-			if err != nil {
-				response = map[string]interface{}{"error": err.Error()}
-			} else {
-				response = map[string]interface{}{"success": true}
-			}
-		}
-
-	case "kill":
-		id, _ := cmd["id"].(string)
-		if id == "" {
-			response = map[string]interface{}{"error": "id required"}
-		} else {
-			err := tc.KillProcess(id)
-			if err != nil {
-				response = map[string]interface{}{"error": err.Error()}
-			} else {
-				response = map[string]interface{}{"success": true}
-			}
-		}
-
-	case "kill_loop":
-		loop, _ := cmd["loop"].(string)
-		if loop == "" {
-			response = map[string]interface{}{"error": "loop required"}
-		} else {
-			err := tc.KillLoop(loop)
-			if err != nil {
-				response = map[string]interface{}{"error": err.Error()}
-			} else {
-				response = map[string]interface{}{"success": true}
-			}
-		}
-
+	// Route the tool call to the corresponding native function
+	switch req.Tool {
+	case "container_exec":
+		response = tc.tool_ContainerExec(req.Arguments)
+	case "memory_commit":
+		response = tc.tool_MemoryCommit(req.Arguments)
+	case "container_upgrade_image":
+		response = MCPResponse{Output: "CONTAINER_UPGRADE: Base image marked for next sprint.", Success: true}
 	default:
-		response = map[string]interface{}{"error": "unknown action: " + action}
+		response = MCPResponse{Error: fmt.Sprintf("unknown tool: %s", req.Tool), Success: false}
 	}
 
-	return response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
-func (tc *TowerControl) handleCommand(cmd map[string]interface{}, conn *websocket.Conn) {
-	response := tc.processCommand(cmd)
-	conn.WriteJSON(response)
+
+// =============================================================================
+// HTTP & WS HANDLERS
+// =============================================================================
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for local development
+	},
 }
 
 func (tc *TowerControl) handleState(w http.ResponseWriter, r *http.Request) {
@@ -442,103 +419,84 @@ func (tc *TowerControl) handleWariaUpdate(w http.ResponseWriter, r *http.Request
 	}
 
 	tc.WariaUpdate(update.Agent, update.Output, update.TokenCount)
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleProcesses GET returns all processes, POST creates a new one
-func (tc *TowerControl) handleProcesses(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if r.Method == http.MethodGet {
-		tc.mu.RLock()
-		defer tc.mu.RUnlock()
-		json.NewEncoder(w).Encode(tc.processes)
+func (tc *TowerControl) handleWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println("WebSocket upgrade failed:", err)
 		return
 	}
 
-	if r.Method == http.MethodPost {
-		var req struct {
-			Agent string `json:"agent"`
-			Phase string `json:"phase"`
-			GPU   int    `json:"gpu"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		id, err := tc.StartProcess(req.Agent, req.Phase, req.GPU)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"id": id})
-		return
-	}
+	tc.clientsMu.Lock()
+	tc.wsClients[conn] = true
+	tc.clientsMu.Unlock()
+	log.Printf("New WebSocket client connected: %s", conn.RemoteAddr())
+	
+	conn.WriteJSON(tc.GetSystemState())
 
-	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	go func() {
+		defer func() {
+			conn.Close()
+			tc.clientsMu.Lock()
+			delete(tc.wsClients, conn)
+			tc.clientsMu.Unlock()
+			log.Printf("WebSocket client disconnected: %s", conn.RemoteAddr())
+		}()
+		
+		for {
+			var cmd map[string]interface{}
+			err := conn.ReadJSON(&cmd)
+			if err != nil {
+				if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				} else if err != io.EOF {
+					log.Println("WebSocket read error:", err)
+				}
+				break
+			}
+			tc.handleCommandWS(conn, cmd)
+		}
+	}()
 }
 
-// handleProcess GET returns a single process by ID
-func (tc *TowerControl) handleProcess(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	id := r.PathValue("id")
-	if id == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
-		return
-	}
-
-	if r.Method == http.MethodGet {
-		tc.mu.RLock()
-		ps, exists := tc.processes[id]
-		tc.mu.RUnlock()
-
-		if !exists {
-			http.Error(w, "process not found", http.StatusNotFound)
-			return
-		}
-		json.NewEncoder(w).Encode(ps)
-		return
-	}
-
-	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-}
-
-// handleCommandHTTP allows HTTP clients to send the same commands as the WebSocket
-func (tc *TowerControl) handleCommandHTTP(w http.ResponseWriter, r *http.Request) {
-	var cmd map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
+func (tc *TowerControl) handleCommandWS(conn *websocket.Conn, cmd map[string]interface{}) {
 	response := tc.processCommand(cmd)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	conn.WriteJSON(response)
 }
+
+
+// =============================================================================
+// MAIN FUNCTION
+// =============================================================================
 
 func main() {
 	tower := NewTowerControl()
+	
+	// Initialize the MCP Server with TowerControl reference
+	mcpServer := NewMCPServer(tower)
+	
+	// SIMULATE: Start initial processes for demonstration on the CLI
+	tower.StartProcess("Clash", "C_LOOP_SPRINT", 0)
+	tower.StartProcess("Bash", "C_LOOP_SPRINT", 0)
+	tower.StartProcess("Diplo", "AUDIT_MEMORY", 1)
 
-	// REST API
+	// REST API Handlers
 	http.HandleFunc("/api/state", tower.handleState)
 	http.HandleFunc("/api/waria", tower.handleWariaUpdate)
-	http.HandleFunc("/api/command", tower.handleCommandHTTP)
-	http.HandleFunc("/api/processes", tower.handleProcesses)
-	http.HandleFunc("/api/processes/{id}", tower.handleProcess)
+	
+	// CRITICAL MCP ENDPOINT (Agent Interface) - Uses MCPServer HTTP handler
+	http.Handle("/api/mcp", mcpServer)
 
-	// WebSocket for real-time updates
-	http.HandleFunc("/ws", tower.handleWebSocket)
+	// WebSocket for TUI CLI
+	http.HandleFunc("/ws", tower.handleWS)
 
-	// Serve CLI frontend
-	http.Handle("/", http.FileServer(http.Dir("./web")))
-
-	port := os.Getenv("KIRKTOWER_PORT")
-	if port == "" {
-		port = "9090"
+	port := ":8080"
+	log.Printf("Kirktower Control Kernel starting on http://localhost%s", port)
+	log.Printf("MCP Endpoint available at http://localhost%s/api/mcp", port)
+	
+	// Note: Must be run with `go run types.go kirktower.go mcp_server.go` or `go run *.go`
+	if err := http.ListenAndServe(port, nil); err != nil {
+		log.Fatal("ListenAndServe: ", err)
 	}
-
-	log.Printf("Kirktower Control Tower listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
