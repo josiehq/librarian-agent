@@ -1,0 +1,53 @@
+{
+  "name": "Clash Code Generation",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.22"
+    }
+  },
+  
+  "postCreateCommand": "bash /workspaces/librarian-agent/clash/setup_clash.sh",
+  
+  "forwardPorts": [
+    11434,
+    8086
+  ],
+  
+  "portsAttributes": {
+    "11434": {
+      "label": "Ollama",
+      "onAutoForward": "notify"
+    },
+    "8086": {
+      "label": "Clash MCP",
+      "onAutoForward": "notify"
+    }
+  },
+  
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "continue.continue",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "golang.go"
+      ],
+      "settings": {
+        "continue.modelProvider": "ollama",
+        "continue.ollamaUrl": "http://localhost:11434",
+        "continue.model": "qwen3-coder-reap-25b-a3b:q4_k_m",
+        "python.defaultInterpreterPath": "/usr/local/bin/python3"
+      }
+    }
+  },
+  
+  "remoteUser": "vscode"
+}

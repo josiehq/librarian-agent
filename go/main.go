@@ -1,39 +1,40 @@
-package go
+package main
 
+import (
+	"log"
+	"net/http"
 
+	"github.com/josiehq/librarian-agent/kernel"
+)
 
+func main() {
+	log.Println("Starting Librarian Agent MCP Server...")
 
+	// Initialize TowerControl (includes hardware monitor + agent queue)
+	tower := kernel.NewTowerControl()
 
+	// Initialize MCP Server
+	server := kernel.NewMCPServer(tower)
 
+	// Register HTTP handlers
+	http.HandleFunc("/mcp", server.ServeHTTP)
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
 
+	// Hardware monitoring endpoint (D3 Waria)
+	http.Handle("/api/system/health", tower.GetHardwareMonitor())
 
+	// Agent queue endpoints (D1 Diplo + D3 Waria)
+	tower.GetAgentQueue().RegisterHandlers(http.DefaultServeMux)
 
+	log.Println("[MCP SERVER] Listening on :8080")
+	log.Println("[ENDPOINTS] /mcp (JSON-RPC 2.0), /health (Status)")
+	log.Println("[ENDPOINTS] /api/system/health (Hardware Monitor)")
+	log.Println("[ENDPOINTS] /api/queue/submit, /api/queue/status, /api/queue/list (Agent Queue)")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-}	log.Println("TUI CLI not yet implemented in main.go - run 'go run cli/*.go' instead")	// Delegates to main() function in tower_cll.gofunc runTowerCLI() {}	log.Println("MCP Server not yet implemented in main.go - run 'go run kernel/*.go types.go' instead")	// Delegates to main() function in kirktower.gofunc runMCPServer(port, wsPort string) {// Placeholder functions - actual implementations in kernel/kirktower.go and cli/tower_cll.go}	}		log.Fatalf("Unknown mode: %s (use 'server' or 'tui')", *mode)	default:		runTowerCLI()		log.Printf("Starting Tower CLI (TUI)...")	case "tui":		runMCPServer(*port, *wsPort)		log.Printf("Starting Kirktower MCP Server on %s (WebSocket: %s)", *port, *wsPort)	case "server":	switch *mode {	flag.Parse()	wsPort := flag.String("ws-port", ":9090", "Port for WebSocket")	port := flag.String("port", ":8080", "Port for MCP server")	mode := flag.String("mode", "server", "Mode: 'server' (Kirktower MCP) or 'tui' (Tower CLI)")func main() {// Call from: go run go/*.go or go build -o kirktower go/main.go go/kernel/*.go go/cli/*.go// main is the entry point for the entire Kirktower system.)	"log"	"flag"import (package main
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		log.Fatalf("Server failed: %v", err)
+	}
+}

@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""
+Box 3 Requirements
+Install all dependencies for MCP wrappers
+"""
+
+# Core dependencies
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.9.0
+
+# Vision (CLIP + DeepSeek OCR)
+torch==2.5.1
+torchvision==0.20.1
+transformers==4.46.0
+pillow==11.0.0
+
+# Whisper (voice)
+# Note: whisper runs via Ollama, no separate install needed
+
+# Browser automation
+playwright==1.48.0
+# After install: playwright install chromium
+
+# Image processing
+numpy==2.1.3
+opencv-python==4.10.0.84
+
+# HTTP client
+requests==2.32.3
+aiohttp==3.11.0
+
+# Visual Sovereign integration (already exists)
+# No new dependencies needed
+
+# Figma MCP (proxy)
+# No new dependencies needed

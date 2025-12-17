@@ -1,4 +1,4 @@
-package main
+package kernel
 
 import (
 	"bytes"
@@ -129,9 +129,32 @@ func (s *MCPServer) sendToDiplo(entry LogEntry) {
 
 // registerTools maps the Python-facing tool name to the internal Go function
 func (s *MCPServer) registerTools() {
+	// Original 3 tools
 	s.tools["container_exec"] = s.tool_ContainerExec
 	s.tools["memory_commit"] = s.tool_MemoryCommit
 	s.tools["fs_write_guarded"] = s.tool_FSWriteGuarded
+
+	// NEW: MCP tool integrations
+	s.tools["fabric_execute"] = s.tool_FabricExecute
+	s.tools["nvim_lsp"] = s.tool_NvimLSP
+	s.tools["github_api"] = s.tool_GitHubAPI
+	s.tools["terminal_exec"] = s.tool_TerminalExec
+	s.tools["figma_api"] = s.tool_FigmaAPI
+	s.tools["browser_navigate"] = s.tool_BrowserNavigate
+	s.tools["web_crawl"] = s.tool_WebCrawl
+	s.tools["amazon_api"] = s.tool_AmazonAPI
+
+	// CORE INFRASTRUCTURE TOOLS
+	s.tools["agno_orchestrate"] = s.tool_AgnoOrchestrate   // Kirktower's DNA
+	s.tools["openhands_execute"] = s.tool_OpenHandsExecute // C/D agents' DNA
+
+	// TBD / Stubs
+	s.tools["narnia_execute"] = s.tool_NarniaExecute
+	s.tools["visual_sovereign"] = s.tool_VisualSovereign
+	s.tools["vscode_mcp"] = s.tool_VSCodeMCP   // C3 Clash - Codespaces crawler
+	s.tools["redis_queue"] = s.tool_RedisQueue // D2 Diplo - Memory & task queue
+
+	log.Println("[MCP SERVER] Registered 17 total tools (3 original + 14 MCP integrations)")
 }
 
 // =============================================================================
@@ -310,6 +333,12 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if !exists {
 		s.sendError(w, req.ID, -32601, fmt.Sprintf("Method Not Found: tool '%s' is not registered.", toolName), nil)
+		return
+	}
+
+	// 3.5. Authorization Check (NEW)
+	if !s.checkPermission(agentID, toolName) {
+		s.sendError(w, req.ID, -32000, fmt.Sprintf("Authorization Denied: Agent '%s' not authorized to use tool '%s'", agentID, toolName), nil)
 		return
 	}
 

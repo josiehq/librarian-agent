@@ -1,4 +1,4 @@
-package main
+package kernel
 
 import (
 	"context"
@@ -29,6 +29,12 @@ type TowerControl struct {
 	wsClients map[*websocket.Conn]bool
 	clientsMu sync.RWMutex
 	broadcast chan interface{}
+
+	// Hardware monitoring (D3 Waria)
+	hwMonitor *HardwareMonitor
+
+	// Agent queueing (D1 Diplo + D3 Waria)
+	agentQueue *AgentQueue
 }
 
 // NOTE: MCPRequest and MCPResponse are defined in mcp_server.go
@@ -48,6 +54,15 @@ func NewTowerControl() *TowerControl {
 		wsClients: make(map[*websocket.Conn]bool),
 		broadcast: make(chan interface{}, 100),
 	}
+
+	// Initialize hardware monitoring
+	tc.hwMonitor = NewHardwareMonitor()
+	log.Printf("Hardware monitor initialized: %d CPUs, %d GPUs detected",
+		tc.hwMonitor.GetState().CPUCores,
+		len(tc.hwMonitor.GetState().GPUs))
+
+	// Initialize agent queue (4 concurrent workers)
+	tc.agentQueue = NewAgentQueue(4, tc.hwMonitor, tc)
 
 	go tc.broadcaster()
 	return tc
@@ -285,6 +300,16 @@ func (tc *TowerControl) broadcaster() {
 	}
 }
 
+// GetHardwareMonitor returns the hardware monitor for external access
+func (tc *TowerControl) GetHardwareMonitor() *HardwareMonitor {
+	return tc.hwMonitor
+}
+
+// GetAgentQueue returns the agent queue for external access
+func (tc *TowerControl) GetAgentQueue() *AgentQueue {
+	return tc.agentQueue
+}
+
 // WariaUpdate receives updates from agents and checks thresholds
 func (tc *TowerControl) WariaUpdate(agent, output string, tokenCount int) {
 	tc.waria.mu.Lock()
@@ -417,6 +442,12 @@ func main() {
 
 	// WebSocket for TUI CLI
 	http.HandleFunc("/ws", tower.handleWS)
+
+	// Hardware monitoring endpoint (D3 Waria)
+	http.Handle("/api/system/health", tower.hwMonitor)
+
+	// Agent queue endpoints (D1 Diplo + D3 Waria)
+	tower.agentQueue.RegisterHandlers(http.DefaultServeMux)
 
 	port := ":8080"
 	log.Printf("Kirktower MCP Server ready on http://localhost%s", port)

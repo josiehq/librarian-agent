@@ -17,6 +17,7 @@ setup(
     author_email="dev@josiehq.com",
     url="https://github.com/josiehq/librarian-agent",
     license="MIT",
+    packages=find_packages(include=["narnia", "narnia.*", "py", "py.*"]),
     py_modules=[
         "josiedesk_core",
         "josiedesk_hybrid",
@@ -34,6 +35,16 @@ setup(
         
         # Multi-agent orchestration
         "pyautogen>=0.2.0",
+        "metagpt>=0.7.0",
+        
+        # RAG and embeddings (for A3 Athena)
+        "chromadb>=0.4.0",
+        "sentence-transformers>=2.2.0",
+        
+        # Web automation (for B1 Raw)
+        "beautifulsoup4>=4.12.0",
+        "selenium>=4.15.0",
+        "playwright>=1.40.0",
         
         # Async and utilities
         "asyncio-contextmanager>=1.0.0",

@@ -1,6 +1,6 @@
 # Librarian Agent - Multi-Agent Swarm System
 
-A modular framework for orchestrating autonomous AI agents across planning, auditing, construction, and execution phases.
+A hierarchical 13-agent framework for orchestrating autonomous AI agents across planning, auditing, construction, and execution phases. Deploy phase-by-phase from foundation to complete GUI-enabled C2 server.
 
 ---
 
@@ -8,37 +8,42 @@ A modular framework for orchestrating autonomous AI agents across planning, audi
 
 | Need | Document | Time |
 |------|----------|------|
-| **Quick Start** | [README_INTEGRATION.md](README_INTEGRATION.md) | 5 min |
-| **Commands** | [QUICKSTART.sh](QUICKSTART.sh) | 2 min |
-| **Verify Setup** | [verify_dependencies.py](verify_dependencies.py) | 1 min |
-| **Check List** | [INTEGRATION_CHECKLIST.md](INTEGRATION_CHECKLIST.md) | 10 min |
-| **Implementation** | [DETAILED_CHANGES.md](DETAILED_CHANGES.md) | 20 min |
-| **Full Report** | [FINAL_REPORT.md](FINAL_REPORT.md) | 30 min |
+| **🚀 Quick Start** | [docs/QUICKSTART.md](docs/QUICKSTART.md) | 5 min |
+| **📖 Complete Guide** | [docs/MASTER_DEPLOYMENT.md](docs/MASTER_DEPLOYMENT.md) | 30 min |
+| **📋 All Docs** | [docs/INDEX.md](docs/INDEX.md) | - |
+| **Phase 1** | [docs/PHASE_1_D_RANK_DEPLOYMENT.md](docs/PHASE_1_D_RANK_DEPLOYMENT.md) | 15 min |
+| **Phase 2** | [docs/PHASE_2_B_RANK_DEPLOYMENT.md](docs/PHASE_2_B_RANK_DEPLOYMENT.md) | 15 min |
+| **Phase 3** | [docs/PHASE_3_C_RANK_DEPLOYMENT.md](docs/PHASE_3_C_RANK_DEPLOYMENT.md) | 15 min |
+| **Phase 4** | [docs/PHASE_4_A_RANK_GUI.md](docs/PHASE_4_A_RANK_GUI.md) | 15 min |
+
+### Legacy Integration Docs
+| Document | Purpose |
+|----------|---------|
+| [README_INTEGRATION.md](README_INTEGRATION.md) | Original integration guide |
+| [README_STRUCTURE.md](README_STRUCTURE.md) | Directory structure |
+| [docs/INTEGRATION_CHECKLIST.md](docs/INTEGRATION_CHECKLIST.md) | Legacy checklist |
 
 ---
 
-## 🎯 What Was Fixed
+## 🎯 13-Agent System
 
-### ✅ 5 Major Issues Resolved
+### Agent Hierarchy
 
-1. **Protocol Mismatch** → Go server now accepts Python JSON-RPC format
-2. **Struct Duplication** → Centralized all types in types.go  
-3. **Tool Argument Mismatch** → All signatures standardized
-4. **Missing Dependencies** → Flask and AutoGen added to setup.py
-5. **Agent Tracking** → Agent ID tracking throughout call chain
+```
+A-Class (Command)    → A1 Roark, A2 Josie, A3 Athena
+B-Class (Builders)   → B1 Raw, B2 Vision, B3 Concrete, B4 Kirktower
+C-Class (Control)    → C1 Bash, C2 Gunash, C3 Clash
+D-Class (Foundation) → D1 Puckfairy, D2 Diplo, D3 Waria
+```
 
----
+### Deployment Phases
 
-## 📊 Changes Summary
-
-| Component | Type | Changes |
-|-----------|------|---------|
-| mcp_server.go | Go | +70 lines (dual-format parsing) |
-| kirktower.go | Go | -64 lines (removed duplicates) |
-| types.go | Go | +20 lines (enhanced struct tags) |
-| josiedesk_hybrid.py | Python | +45 lines (fixed MCP calls) |
-| setup.py | Python | +2 deps (Flask, AutoGen) |
-| **Documentation** | Various | **10 files created** |
+```
+Phase 1 → D-Rank (Foundation)     → 3 agents  → Checkpoint 1
+Phase 2 → B-Rank (Builders)       → +4 agents → Checkpoint 2
+Phase 3 → C-Rank (Control)        → +3 agents → Advanced
+Phase 4 → A-Rank (Command + GUI)  → +3 agents → Complete
+```
 
 ---
 
@@ -46,8 +51,153 @@ A modular framework for orchestrating autonomous AI agents across planning, audi
 
 ### Prerequisites
 ```bash
-python --version    # 3.8+
-go version         # 1.20+
+python --version    # 3.10+
+go version         # 1.21+
+node --version     # 18+
+```
+
+### Installation
+```bash
+# Clone repository
+git clone https://github.com/josiehq/librarian-agent.git
+cd librarian-agent
+
+# Install Python dependencies
+pip install -e .
+
+# Build Go components
+cd go/kernel && go build -o mcp_server *.go
+cd ../cli && go build -o tower_cll tower_cll.go
+
+# Set API keys
+export ANTHROPIC_API_KEY="your-key"
+export OPENAI_API_KEY="your-key"
+export GITHUB_TOKEN="your-token"
+```
+
+### Deploy Phase 1
+```bash
+# Follow Phase 1 guide
+# See: docs/PHASE_1_D_RANK_DEPLOYMENT.md
+
+# Start MCP server
+./go/kernel/mcp_server --port 8080 &
+
+# Deploy D-class agents (see phase docs for details)
+```
+
+---
+
+## 📖 Documentation Structure
+
+### New Deployment System (Start Here!)
+- **[docs/QUICKSTART.md](docs/QUICKSTART.md)** - Overview and quick reference
+- **[docs/MASTER_DEPLOYMENT.md](docs/MASTER_DEPLOYMENT.md)** - Complete deployment guide
+- **[docs/INDEX.md](docs/INDEX.md)** - Documentation index
+
+### Phase-by-Phase Guides
+1. **[docs/PHASE_1_D_RANK_DEPLOYMENT.md](docs/PHASE_1_D_RANK_DEPLOYMENT.md)** - Foundation layer (D1, D2, D3)
+2. **[docs/PHASE_2_B_RANK_DEPLOYMENT.md](docs/PHASE_2_B_RANK_DEPLOYMENT.md)** - Builder layer (B1-B4)
+3. **[docs/PHASE_3_C_RANK_DEPLOYMENT.md](docs/PHASE_3_C_RANK_DEPLOYMENT.md)** - Control layer (C1-C3)
+4. **[docs/PHASE_4_A_RANK_GUI.md](docs/PHASE_4_A_RANK_GUI.md)** - Command layer (A1-A3) + GUI
+
+### Architecture & Integration
+- **[docs/MCP_ARCHITECTURE.md](docs/MCP_ARCHITECTURE.md)** - MCP protocol details
+- **[README_INTEGRATION.md](README_INTEGRATION.md)** - Legacy integration guide
+- **[README_STRUCTURE.md](README_STRUCTURE.md)** - Directory structure
+- **[docs/INTEGRATION_CHECKLIST.md](docs/INTEGRATION_CHECKLIST.md)** - Integration checklist
+
+### Change History
+- **[docs/CHANGES_SUMMARY.md](docs/CHANGES_SUMMARY.md)** - High-level changes
+- **[docs/DETAILED_CHANGES.md](docs/DETAILED_CHANGES.md)** - Detailed modifications
+- **[docs/FINAL_REPORT.md](docs/FINAL_REPORT.md)** - Final report
+
+---
+
+## 🏗️ Project Structure
+
+```
+librarian-agent/
+├── agents/                    # 13 agent definitions
+│   ├── A/  (Command)         # Roark, Josie, Athena
+│   ├── B/  (Builders)        # Raw, Vision, Concrete, Kirktower
+│   ├── C/  (Control)         # Bash, Gunash, Clash
+│   └── D/  (Foundation)      # Puckfairy, Diplo, Waria
+│       └── [Agent]/
+│           ├── brain/        # Reasoning logic
+│           ├── exemplar/     # Example outputs & docs
+│           │   └── default_exemplar.md
+│           ├── profile/      # LLM configuration
+│           │   └── api.py
+│           └── tools/        # Agent tools & rules
+│               └── rules.py  # MCP communication rules
+├── docs/                     # Comprehensive documentation
+├── go/                       # Go kernel & CLI
+│   ├── kernel/              # mcp_server.go, kirktower.go
+│   └── cli/                 # tower_cll.go
+├── py/                       # Python orchestration
+│   ├── orchestration/       # josie.py, c_loop.py
+│   └── memory/              # diplo.py
+├── scripts/                  # Utility scripts
+└── config/                   # Configuration files
+```
+
+---
+
+## 🎯 Key Features
+
+### Triangular Communication
+- **VPS** ↔ **Local Machine** ↔ **GitHub Codespaces**
+- Bilateral SSH tunnels for resilience
+- Distributed logging across all nodes
+
+### Hierarchical Agents
+- **Superiors & Subordinates**: Puckfairy → Bash, Gunash → Clash
+- **Tool Ownership Transfers**: Phase 1 → Phase 3
+- **Peer Coordination**: All agents communicate within class
+
+### MCP Monolithic Server
+- Single `mcp_server.go` coordinates 7+ MCP tools
+- No containers in v1 (monolithic deployment)
+- Tools: Neovim, GitHub+Narnia, Fabric, Selenium+Playwright, Figma, Amazon, VSCode
+
+### Smart Caching & Logging
+- **Diplo (D2)** full-time logging and caching
+- Compression: zstd for builds, gzip for logs
+- Retention: 7-90 days based on type
+- Self-improving log analysis
+
+### Advanced RAG (Phase 4)
+- **Athena (A3)** provides RAG intelligence
+- ChromaDB + Sentence Transformers
+- Indexes: agents, logs, code, documentation
+- Smart agent suggestions
+
+### Custom GUI (Phase 4)
+- OpenUI fork customized for 13-agent coordination
+- Real-time status dashboard
+- Hierarchical visualization
+- Command center interface
+
+---
+
+## 🔑 Required Credentials
+
+```bash
+# LLM Providers (required)
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+
+# GitHub (required)
+export GITHUB_TOKEN="ghp_..."
+
+# Phase 2+ (optional)
+export FIGMA_ACCESS_TOKEN="..."
+export AMAZON_ACCESS_KEY="..."
+export AMAZON_SECRET_KEY="..."
+```
+
+---
 docker --version   # For container_exec
 ```
 
