@@ -140,19 +140,6 @@ func RouteToClash(task CodeTask) (interface{}, error) {
 
 ---
 
-## Cost
-
-### GitHub Codespaces Pricing
-- **4-core instance**: $0.36/hour
-- **8 hours/day**: $87/month
-- **Free tier**: 60 hours/month = **$0/month** for light use!
-
-### Alternative: AWS t3a.xlarge
-- **4 vCPU, 16 GB RAM**: $0.1504/hr = $108/month (24/7)
-- Use if Codespace limits exhausted
-
----
-
 ## Testing
 
 ```bash

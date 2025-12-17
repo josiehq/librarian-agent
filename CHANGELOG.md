@@ -105,26 +105,22 @@ Complete implementation of distributed multi-agent system with hardware-aware or
   - D1 Puckfairy: rnj-1:8b (routing/delegation)
   - D2 Diplo: nemotron-cascade:8b (queue management)
   - Deployment: GitHub Codespace 4-core OR AWS t3a.xlarge
-  - Cost: $0-$108/month
 
 - **Box 2 (B-C Agents - AWS g5.xlarge)**
   - B1 Concrete Vision: Tools-based (nemotron-ocr + whisper + Olmo-3-7B)
   - C1 Bash: Olmo-3-7B-Think (shell automation)
   - Deployment: AWS EC2 g5.xlarge (1x A10G 24GB)
   - VRAM Usage: 15GB / 24GB (63%)
-  - Cost: $241/month (8hr/day) or $723/month (24/7)
 
 - **Box 3 (Clash - GitHub Codespace)**
   - C2 Clash: REAP-25B (code generation)
   - Deployment: GitHub Codespace 4-core
-  - Cost: $0-$87/month
 
 - **Box 4 (A-Agents - Google Cloud)**
   - A1 Josie: Qwen3-Next-80B-A3B (advanced reasoning)
   - A2 Roark: Qwen3-Next-80B + Cogito-109B (dual model!)
   - C3 Gunash: Cogito-109B (shell command generation)
   - Deployment: GCP with A100-80GB
-  - Cost: $50-$440/month (depending on usage)
 
 ---
 
@@ -161,12 +157,12 @@ Complete implementation of distributed multi-agent system with hardware-aware or
 
 #### **Hardware Requirements**
 
-| Box | Instance Type | GPU | VRAM | RAM | Cost/Month |
-|-----|--------------|-----|------|-----|------------|
-| Box 1 | Codespace/t3a.xlarge | None | - | 16GB | $0-$108 |
-| Box 2 | g5.xlarge | 1x A10G | 24GB | 16GB | $241-$723 |
-| Box 3 | Codespace 4-core | None | - | 16GB | $0-$87 |
-| Box 4 | GCP A100-80GB | 1x A100 | 80GB | 30GB+ | $50-$440 |
+| Box | Instance Type | GPU | VRAM | RAM |
+|-----|--------------|-----|------|-----|
+| Box 1 | Codespace/t3a.xlarge | None | - | 16GB |
+| Box 2 | g5.xlarge | 1x A10G | 24GB | 16GB |
+| Box 3 | Codespace 4-core | None | - | 16GB |
+| Box 4 | GCP A100-80GB | 1x A100 | 80GB | 30GB+ |
 
 #### **Model Sizes**
 
@@ -185,24 +181,6 @@ Complete implementation of distributed multi-agent system with hardware-aware or
 - **Code Generation**: 15-25 tokens/sec (REAP-25B on Codespace CPU)
 - **D-Agent Routing**: 5-8 sec latency (8B models on CPU)
 - **Queue Throughput**: 4 concurrent workers with dynamic GPU assignment
-
----
-
-### Cost Optimization
-
-#### **Development Setup** ($378/month)
-- Box 1: Codespace 4-core (8hr/day) - $87
-- Box 2: g5.xlarge (8hr/day) - $241
-- Box 3: Codespace free tier - $0
-- Box 4: Google Colab Pro+ - $50
-
-#### **Production Setup** ($1,358/month)
-- Box 1: t3a.xlarge (24/7) - $108
-- Box 2: g5.xlarge (24/7) - $723
-- Box 3: Codespace (8hr/day) - $87
-- Box 4: GCP A100 (4hr/day) - $440
-
-**Savings vs Original Design**: $283/month (17% reduction via on-demand scheduling)
 
 ---
 

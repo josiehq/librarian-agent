@@ -44,7 +44,7 @@ go build -o kirktower_bin *.go
 curl http://localhost:8080/health
 ```
 
-**Cost**: $87/month (8 hrs/day) or $0 (free tier 60 hrs/month)
+
 
 #### Option B: Local Development
 ```bash
@@ -65,7 +65,7 @@ aws ec2 run-instances \
 # SSH and setup (same as Codespace)
 ```
 
-**Cost**: $108/month
+
 
 ---
 
@@ -152,7 +152,7 @@ sudo systemctl enable box2-mcps
 sudo systemctl start box2-mcps
 ```
 
-**Cost**: $241/month (8 hrs/day) or $723/month (24/7)
+
 
 ---
 
@@ -185,7 +185,7 @@ curl http://localhost:8086/clash/generate \
   -d '{"prompt": "Create a hello world function", "language": "python"}'
 ```
 
-**Cost**: $87/month (8 hrs/day) or $0 (free tier)
+
 
 ---
 
@@ -195,7 +195,7 @@ curl http://localhost:8086/clash/generate \
 
 #### Option A: Google Colab Pro+ (Cheapest)
 ```bash
-# 1. Subscribe to Colab Pro+ ($50/month)
+# 1. Subscribe to Colab Pro+
 # 2. Create notebook with Ollama
 !curl -fsSL https://ollama.com/install.sh | sh
 !ollama serve &
@@ -214,8 +214,6 @@ print(f"Ollama URL: {public_url}")
 # 5. Set BOX4_URL in Box 1
 export BOX4_URL="https://xxx.ngrok.io"
 ```
-
-**Cost**: $50/month (limited hours)
 
 #### Option B: GCP Vertex AI Workbench
 ```bash
@@ -237,8 +235,6 @@ ollama pull cogito-109b:q4_k_m
 ```
 
 **Cost**: ~$440/month (4 hrs/day with A100-80GB)
-
----
 
 ## Environment Variables
 

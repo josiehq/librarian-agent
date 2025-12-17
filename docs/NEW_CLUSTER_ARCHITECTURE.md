@@ -5,8 +5,7 @@
 ---
 
 ## Box 1: D-Agents (Orchestration)
-**Instance**: GitHub Codespace 4-core (16 GB RAM) OR AWS t3a.xlarge  
-**Cost**: $87/month (8hrs/day) OR $108/month (24/7)
+**Instance**: GitHub Codespace 4-core (16 GB RAM) OR AWS t3a.xlarge
 
 ### Models
 - `rnj-1:8b` (Q4) → **D1 Puckfairy** (routing/delegation)
@@ -21,8 +20,7 @@
 ---
 
 ## Box 2: A-B-C Agents (Merged Big Brain + Vision + Code)
-**Instance**: g5.12xlarge (4x A10G, 96 GB VRAM)  
-**Cost**: $680/month (4hrs/day on-demand)
+**Instance**: g5.12xlarge (4x A10G, 96 GB VRAM)
 
 ### Models
 
@@ -68,8 +66,7 @@ OLLAMA_MAX_LOADED_MODELS=5  # Keep all in VRAM
 ---
 
 ## Box 3: Clash (Code Generation)
-**Instance**: GitHub Codespace 4-core (16 GB RAM)  
-**Cost**: $87/month (8hrs/day dev) OR $0/month (free tier 60hrs)
+**Instance**: GitHub Codespace 4-core (16 GB RAM)
 
 ### Model
 - **Qwen3-Coder-REAP-25B-A3B** (Q4: ~13 GB)
@@ -94,19 +91,6 @@ python3 clash_mcp.py
 - Install GitHub Copilot alternative using Ollama backend
 - Point to `http://localhost:11434` for Clash REAP-25B
 - Code completions, refactoring, chat all via Clash
-
----
-
-## Cost Breakdown
-
-| Box | Instance | Models | Cost/Month |
-|-----|----------|--------|------------|
-| **Box 1** | Codespace 4-core | rnj-1 + nemotron-cascade | $87 (8hr/day) |
-| **Box 2** | g5.12xlarge | Qwen3-80B + Cogito-109B + Vision/Voice/Browser | $680 (4hr/day) |
-| **Box 3** | Codespace 4-core | REAP-25B | $87 (8hr/day) |
-| **Total** | | | **$854/month** |
-
-**Alternative**: Run Box 1 24/7 on AWS t3a.xlarge = $108/mo (total $895/mo)
 
 ---
 
